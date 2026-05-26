@@ -56,6 +56,23 @@ function App() {
           <Row label="Рейтинг" value={String(data.reviews.rating)} />
           <Row label="Кол-во отзывов" value={String(data.reviews.reviewCount)} />
           <Row label="Фото в отзывах" value={data.reviews.hasPhotos ? 'Есть' : 'Нет'} />
+
+          <div style={{ color: '#8899BB', margin: '16px 0 8px', fontSize: '12px' }}>
+            НАЗВАНИЕ И SEO
+          </div>
+          <Row label="Длина названия" value={`${data.title.length} симв.`} />
+          <Row label="Бренд в названии" value={data.title.hasBrand ? 'Есть' : 'Нет'} />
+          <Row label="Ключи" value={data.title.keywords.join(', ')} />
+
+          <div style={{ color: '#8899BB', margin: '16px 0 8px', fontSize: '12px' }}>
+            ДОСТАВКА
+          </div>
+          <Row label="Срок" value={data.delivery.speedText} />
+
+          <div style={{ color: '#8899BB', margin: '16px 0 8px', fontSize: '12px' }}>
+            ОПИСАНИЕ
+          </div>
+          <Row label="Длина" value={`${data.description.length} симв.`} />
         </div>
       )}
     </div>
