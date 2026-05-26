@@ -1,38 +1,73 @@
-# Pomogator.ai — Chrome Extension
+# React + TypeScript + Vite
 
-Анализ карточки товара конкурента на Ozon прямо в браузере.
+This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
-## Быстрый старт
+Currently, two official plugins are available:
 
-```bash
-npm install
-npm run dev
-# Открой chrome://extensions → Load unpacked → выбери папку /dist
+- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
+- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+
+## React Compiler
+
+The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+
+## Expanding the ESLint configuration
+
+If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+
+```js
+export default defineConfig([
+  globalIgnores(['dist']),
+  {
+    files: ['**/*.{ts,tsx}'],
+    extends: [
+      // Other configs...
+
+      // Remove tseslint.configs.recommended and replace with this
+      tseslint.configs.recommendedTypeChecked,
+      // Alternatively, use this for stricter rules
+      tseslint.configs.strictTypeChecked,
+      // Optionally, add this for stylistic rules
+      tseslint.configs.stylisticTypeChecked,
+
+      // Other configs...
+    ],
+    languageOptions: {
+      parserOptions: {
+        project: ['./tsconfig.node.json', './tsconfig.app.json'],
+        tsconfigRootDir: import.meta.dirname,
+      },
+      // other options...
+    },
+  },
+])
 ```
 
-## Документация
+You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
 
-- [`docs/PROJECT_OVERVIEW.md`](docs/PROJECT_OVERVIEW.md) — концепция, аудитория, система оценки
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — структура файлов, компоненты, цвета
-- [`docs/TECH_STACK.md`](docs/TECH_STACK.md) — стек с обоснованием
-- [`docs/CURRENT_STATUS.md`](docs/CURRENT_STATUS.md) — прогресс и следующие шаги
+```js
+// eslint.config.js
+import reactX from 'eslint-plugin-react-x'
+import reactDom from 'eslint-plugin-react-dom'
 
-## Система оценки MVP
-
-9 блоков, 78/100 баллов парсим сами, 22 pts — AI-слоты на будущее.
-
-| Блок | Pts |
-|------|-----|
-| Фото и медиа | 22 |
-| Характеристики | 18 |
-| Отзывы и рейтинг | 16 |
-| Название и SEO | 14 |
-| Доставка | 12 |
-| Описание | 10 |
-| Rich-контент | 5 |
-| Цена и акции | 2 |
-| Место в выдаче | 1 |
-
-## Перед началом работы
-
-**Всегда читай [`docs/PROJECT_OVERVIEW.md`](docs/PROJECT_OVERVIEW.md) и [`docs/CURRENT_STATUS.md`](docs/CURRENT_STATUS.md)** — там контекст и актуальные задачи.
+export default defineConfig([
+  globalIgnores(['dist']),
+  {
+    files: ['**/*.{ts,tsx}'],
+    extends: [
+      // Other configs...
+      // Enable lint rules for React
+      reactX.configs['recommended-typescript'],
+      // Enable lint rules for React DOM
+      reactDom.configs.recommended,
+    ],
+    languageOptions: {
+      parserOptions: {
+        project: ['./tsconfig.node.json', './tsconfig.app.json'],
+        tsconfigRootDir: import.meta.dirname,
+      },
+      // other options...
+    },
+  },
+])
+```
