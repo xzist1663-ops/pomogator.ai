@@ -43,6 +43,12 @@ function App() {
           <Row label="Видео" value={data.photos.hasVideo ? 'Да' : 'Нет'} />
           <Row label="3D / 360°" value={data.photos.has360 ? 'Да' : 'Нет'} />
           <Row label="Инфографика" value={data.photos.hasInfographic ? 'Да' : 'Нет'} />
+
+          <div style={{ color: '#8899BB', margin: '16px 0 8px', fontSize: '12px' }}>
+            ХАРАКТЕРИСТИКИ
+          </div>
+          <Row label="Заполнено полей" value={String(data.attributes.count)} />
+          <Row label="Обязательные" value={data.attributes.hasRequired ? 'Есть' : 'Нет'} />
         </div>
       )}
     </div>
