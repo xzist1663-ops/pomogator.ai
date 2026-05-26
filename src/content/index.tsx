@@ -73,6 +73,18 @@ function App() {
             ОПИСАНИЕ
           </div>
           <Row label="Длина" value={`${data.description.length} симв.`} />
+
+          <div style={{ color: '#8899BB', margin: '16px 0 8px', fontSize: '12px' }}>
+            RICH-КОНТЕНТ
+          </div>
+          <Row label="Наличие" value={data.rich.hasRich ? 'Есть' : 'Нет'} />
+          <Row label="Блоков" value={String(data.rich.blockCount)} />
+
+          <div style={{ color: '#8899BB', margin: '16px 0 8px', fontSize: '12px' }}>
+            ЦЕНА И АКЦИИ
+          </div>
+          <Row label="Цена" value={`${data.price.currentPrice} ₽`} />
+          <Row label="Скидка" value={data.price.hasDiscount ? `${data.price.discountPercent}%` : 'Нет'} />
         </div>
       )}
     </div>
