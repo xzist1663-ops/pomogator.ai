@@ -1,1 +1,1 @@
-{"root":["./src/background/index.ts","./src/content/index.tsx","./src/content/parser/attributes.ts","./src/content/parser/index.ts","./src/content/parser/photos.ts"],"version":"6.0.3"}
+{"root":["./src/background/index.ts","./src/content/index.tsx","./src/content/parser/attributes.ts","./src/content/parser/index.ts","./src/content/parser/photos.ts","./src/content/parser/reviews.ts"],"version":"6.0.3"}

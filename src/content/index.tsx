@@ -49,6 +49,13 @@ function App() {
           </div>
           <Row label="Заполнено полей" value={String(data.attributes.count)} />
           <Row label="Обязательные" value={data.attributes.hasRequired ? 'Есть' : 'Нет'} />
+
+          <div style={{ color: '#8899BB', margin: '16px 0 8px', fontSize: '12px' }}>
+            ОТЗЫВЫ И РЕЙТИНГ
+          </div>
+          <Row label="Рейтинг" value={String(data.reviews.rating)} />
+          <Row label="Кол-во отзывов" value={String(data.reviews.reviewCount)} />
+          <Row label="Фото в отзывах" value={data.reviews.hasPhotos ? 'Есть' : 'Нет'} />
         </div>
       )}
     </div>
