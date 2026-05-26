@@ -7,6 +7,7 @@ export default defineConfig({
     react(),
     webExtension({
       manifest: './public/manifest.json',
+      additionalInputs: ['src/popup/index.html'],
     }),
   ],
 })

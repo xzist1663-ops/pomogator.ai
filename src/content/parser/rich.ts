@@ -1,13 +1,16 @@
- export interface RichData {
+export interface RichData {
   hasRich: boolean
-  blockCount: number
+  imageCount: number
 }
 
 export function parseRich(): RichData {
-  const richBlocks = document.querySelectorAll('[data-widget="richTextWidget"]')
-  const blockCount = richBlocks.length
+  // Rich-контент = фото/картинки внутри описания
+  const descWidget = document.querySelector('[data-widget="webDescription"]')
+  const images = descWidget?.querySelectorAll('img') || []
+  const imageCount = images.length
+
   return {
-    hasRich: blockCount > 0,
-    blockCount,
+    hasRich: imageCount > 0,
+    imageCount,
   }
 }

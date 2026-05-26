@@ -1,20 +1,34 @@
- export interface DeliveryData {
+export interface DeliveryData {
   speedText: string
   speedDays: number
+  hasExpress: boolean
 }
 
 export function parseDelivery(): DeliveryData {
-  const match = document.body.innerText.match(
-    /(послезавтра|завтра|сегодня|(\d+)\s*(день|дня|дней))/i
-  )
-
-  let speedText = match?.[0] || 'неизвестно'
+  // Берём срок из кнопки "В корзину" — там чистый текст
+  const cartText = document.querySelector('[data-widget="webAddToCart"]')?.textContent || ''
+  
+  let speedText = 'неизвестно'
   let speedDays = 99
 
-  if (/сегодня/i.test(speedText)) speedDays = 0
-  else if (/завтра/i.test(speedText)) speedDays = 1
-  else if (/послезавтра/i.test(speedText)) speedDays = 2
-  else if (match?.[2]) speedDays = parseInt(match[2], 10)
+  if (/сегодня/i.test(cartText)) {
+    speedText = 'Сегодня'
+    speedDays = 0
+  } else if (/завтра/i.test(cartText) && !/послезавтра/i.test(cartText)) {
+    speedText = 'Завтра'
+    speedDays = 1
+  } else if (/послезавтра/i.test(cartText)) {
+    speedText = 'Послезавтра'
+    speedDays = 2
+  } else {
+    const match = cartText.match(/(\d+)\s*(день|дня|дней)/i)
+    if (match) {
+      speedDays = parseInt(match[1], 10)
+      speedText = `${speedDays} дн.`
+    }
+  }
 
-  return { speedText, speedDays }
+  const hasExpress = /экспресс|express/i.test(document.body.textContent || '')
+
+  return { speedText, speedDays, hasExpress }
 }

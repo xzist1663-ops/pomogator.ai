@@ -5,7 +5,7 @@
   "description": "Анализ карточки товара на Ozon",
  
   "action": {
-    "default_popup": "index.html"
+    "default_popup": "src/popup/index.html"
   },
   "background": {
     "service_worker": "src/background/index.ts",
