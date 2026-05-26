@@ -5,6 +5,38 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       .catch(() => sendResponse({ position: -1, keyword: message.keyword }))
     return true
   }
+
+  if (message.type === 'TEST_API') {
+    ;(async () => {
+      const creds = await chrome.storage.local.get(['clientId', 'apiKey'])
+      if (!creds.clientId || !creds.apiKey) {
+        sendResponse({ error: 'Нет ключей' })
+        return
+      }
+      try {
+        const response = await fetch('https://api-seller.ozon.ru/v1/analytics/search-query/top', {
+          method: 'POST',
+          headers: {
+            'Client-Id': creds.clientId as string,
+            'Api-Key': creds.apiKey as string,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            date_from: '2026-04-01',
+            date_to: '2026-04-30',
+            limit: 10,
+            sort_by: 'popularity',
+            sort_dir: 'DESC',
+          })
+        })
+        const data = await response.json()
+        sendResponse({ ok: response.ok, status: response.status, data })
+      } catch (e) {
+        sendResponse({ error: String(e) })
+      }
+    })()
+    return true
+  }
 })
 
 async function searchSerp(keyword: string, articleId: string) {
@@ -13,7 +45,6 @@ async function searchSerp(keyword: string, articleId: string) {
   const tab = await chrome.tabs.create({ url, active: false })
   if (!tab.id) return { position: -1, keyword }
 
-  // Ждём загрузки страницы
   await new Promise<void>(resolve => {
     chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
       if (tabId === tab.id && info.status === 'complete') {
@@ -23,7 +54,6 @@ async function searchSerp(keyword: string, articleId: string) {
     })
   })
 
-  // Дополнительная пауза для рендера React
   await new Promise(resolve => setTimeout(resolve, 2000))
 
   const results = await chrome.scripting.executeScript({
@@ -45,9 +75,5 @@ async function searchSerp(keyword: string, articleId: string) {
 
   await chrome.tabs.remove(tab.id)
 
-  return {
-    position: results[0]?.result ?? -1,
-    keyword,
-    total: 24
-  }
+  return { position: results[0]?.result ?? -1, keyword, total: 24 }
 }
