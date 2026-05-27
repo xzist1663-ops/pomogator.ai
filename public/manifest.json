@@ -3,7 +3,6 @@
   "name": "Pomogator.ai",
   "version": "0.1.0",
   "description": "Анализ карточки товара на Ozon",
- 
   "action": {
     "default_popup": "src/popup/index.html"
   },
@@ -22,10 +21,14 @@
     "scripting",
     "storage"
   ],
+  "host_permissions": [
+    "https://api-seller.ozon.ru/*",
+    "https://www.ozon.ru/*"
+  ],
   "web_accessible_resources": [
-    {
-      "resources": ["assets/*"],
-      "matches": ["*://www.ozon.ru/*"]
-    }
-  ]
+  {
+    "resources": ["assets/*", "keywords_db.json"],
+    "matches": ["*://www.ozon.ru/*"]
+  }
+]
 }

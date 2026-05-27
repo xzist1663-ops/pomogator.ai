@@ -1,14 +1,13 @@
- export interface AttributeData {
+export interface AttributeData {
+  raw: string
   count: number
   hasRequired: boolean
   filledNames: string[]
 }
 
-// Обязательные поля которые ищем
 const REQUIRED_FIELDS = ['бренд', 'страна', 'материал', 'цвет', 'тип']
 
 export function parseAttributes(): AttributeData {
-  // Ищем характеристики в обоих виджетах
   const terms = document.querySelectorAll(
     '[data-widget="webCharacteristics"] dt, [data-widget="webShortCharacteristics"] dt'
   )
@@ -20,11 +19,10 @@ export function parseAttributes(): AttributeData {
   })
 
   const count = filledNames.length
-
-  // Проверяем сколько обязательных полей заполнено
   const hasRequired = REQUIRED_FIELDS.some(field =>
     filledNames.some(name => name.includes(field))
   )
+  const raw = filledNames.join(' ')
 
-  return { count, hasRequired, filledNames }
+  return { raw, count, hasRequired, filledNames }
 }

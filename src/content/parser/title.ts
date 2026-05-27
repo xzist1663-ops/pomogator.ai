@@ -1,6 +1,7 @@
- import { extractKeywords } from '../../shared/utils/keywords'
+import { extractKeywords } from '../../shared/utils/keywords'
 
 export interface TitleData {
+  raw: string
   text: string
   length: number
   hasBrand: boolean
@@ -10,11 +11,7 @@ export interface TitleData {
 export function parseTitle(): TitleData {
   const text = (document.querySelector('h1')?.textContent || '').trim()
   const length = text.length
-
-  // Бренд — ищем латиницу с заглавной буквы (Aqua, Sony и т.п.)
   const hasBrand = /[A-Z][a-z]+/.test(text)
-
   const keywords = extractKeywords(text, 3)
-
-  return { text, length, hasBrand, keywords }
+  return { raw: text, text, length, hasBrand, keywords }
 }

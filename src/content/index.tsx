@@ -1,9 +1,23 @@
 import React, { useEffect, useState } from 'react'
 import ReactDOM from 'react-dom/client'
 import { parseProduct, ProductData } from './parser'
+import { getPositionOzonSearch } from './positions/ozon-search'
 
+interface KeywordEntry {
+  kw: string
+  pop: number
+  months: number
+  cc: number
+  oc: number
+  comp: number
+}
 
-// --- Scoring ---
+interface KeywordMatch {
+  kw: string
+  pop: number
+  found: boolean
+}
+
 function scorePhotos(p: ProductData['photos']) {
   let s = 0
   if (p.count >= 8) s += 16; else if (p.count >= 5) s += 10; else s += 4
@@ -22,7 +36,7 @@ function scoreAttributes(a: ProductData['attributes']) {
 function scoreReviews(r: ProductData['reviews']) {
   let s = 0
   if (r.rating >= 4.8) s += 5; else if (r.rating >= 4.5) s += 3; else s += 1
-  if (r.reviewCount >= 50) s += 4; else if (r.reviewCount >= 10) s += 2; else s += 0
+  if (r.reviewCount >= 50) s += 4; else if (r.reviewCount >= 10) s += 2
   if (r.hasPhotos) s += 3
   return Math.min(s, 16)
 }
@@ -56,20 +70,70 @@ function scorePrice(p: ProductData['price']) {
   if (p.hasDiscount) return 1
   return 0
 }
+function scoreKeywords(matches: KeywordMatch[]) {
+  if (matches.length === 0) return 0
+  const found = matches.filter(m => m.found).length
+  const ratio = found / matches.length
+  if (ratio >= 0.7) return 8
+  if (ratio >= 0.4) return 5
+  if (ratio >= 0.1) return 2
+  return 0
+}
 
 function getColor(score: number, max: number) {
+  if (max === 0) return '#8899BB'
   const pct = score / max
   if (pct >= 0.75) return '#10B981'
   if (pct >= 0.45) return '#F59E0B'
   return '#EF4444'
 }
 
-// --- Components ---
+function formatPop(pop: number): string {
+  if (pop >= 1_000_000) return `${(pop / 1_000_000).toFixed(1)}M`
+  if (pop >= 1_000) return `${(pop / 1_000).toFixed(0)}K`
+  return String(pop)
+}
+
+const STOPWORDS = new Set(['для','от','не','из','или','это','как','так','при','под','над','без','про','был','все','там','что','где','кто','они','мне','его','её','нет','уже','еще','ещё','пол','нут','ред'])
+
+function wordBoundary(kw: string, text: string): boolean {
+  const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const regex = new RegExp(`(^|\\s|,)${escaped}(\\s|,|$)`, 'i')
+  return regex.test(text)
+}
+
+async function matchKeywords(data: ProductData): Promise<KeywordMatch[]> {
+  try {
+    const url = chrome.runtime.getURL('keywords_db.json')
+    const resp = await fetch(url)
+    const text = await resp.text()
+    const db: KeywordEntry[] = JSON.parse(text)
+    const cardText = [
+      data.title.raw ?? '',
+      data.description.raw ?? '',
+      data.attributes.raw ?? '',
+    ].join(' ').toLowerCase()
+    const found: KeywordMatch[] = db
+      .filter(entry => {
+        const kw = entry.kw.toLowerCase()
+        return kw.length >= 4 && !STOPWORDS.has(kw) && wordBoundary(kw, cardText)
+      })
+      .sort((a, b) => b.pop - a.pop)
+      .slice(0, 15)
+      .map(entry => ({ kw: entry.kw, pop: entry.pop, found: true }))
+    return found
+  } catch (e) {
+    console.error('Pomogator keywords error:', e)
+    return []
+  }
+}
+
 function Block({ title, score, max, children }: {
   title: string, score: number, max: number, children: React.ReactNode
 }) {
   const [open, setOpen] = useState(false)
   const color = getColor(score, max)
+  const scoreLabel = max > 0 ? `${score}/${max}` : '—'
   return (
     <div style={{ borderBottom: '1px solid #1E2D45' }}>
       <div
@@ -81,7 +145,7 @@ function Block({ title, score, max, children }: {
       >
         <span style={{ fontSize: '12px', color: '#8899BB' }}>{title}</span>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span style={{ fontSize: '12px', fontWeight: 700, color }}>{score}/{max}</span>
+          <span style={{ fontSize: '12px', fontWeight: 700, color }}>{scoreLabel}</span>
           <span style={{ color: '#8899BB', fontSize: '10px' }}>{open ? '▲' : '▼'}</span>
         </div>
       </div>
@@ -95,11 +159,107 @@ function Block({ title, score, max, children }: {
 }
 
 function Row({ label, value, good }: { label: string, value: string, good?: boolean | null }) {
-  const color = good === null || good === undefined ? '#8899BB' : good ? '#10B981' : '#EF4444'
+  const color = good == null ? '#8899BB' : good ? '#10B981' : '#EF4444'
   return (
     <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: '11px' }}>
       <span style={{ color: '#8899BB' }}>{label}</span>
       <span style={{ color, fontWeight: 600 }}>{value}</span>
+    </div>
+  )
+}
+
+function KeywordsBlock({ data }: { data: ProductData }) {
+  const [matches, setMatches] = useState<KeywordMatch[] | null>(null)
+  const [positions, setPositions] = useState<Record<string, number | null>>({})
+  const [open, setOpen] = useState(false)
+
+  const articleId = window.location.href.match(/\/(\d{7,10})\/?/)?.[1] ?? ''
+
+  useEffect(() => {
+    matchKeywords(data).then(setMatches)
+  }, [data])
+
+  useEffect(() => {
+    if (!matches || matches.length === 0 || !articleId) return
+    matches.forEach(async (m) => {
+      try {
+        const result = await getPositionOzonSearch(m.kw, articleId)
+        setPositions(prev => ({ ...prev, [m.kw]: result.position }))
+      } catch {
+        setPositions(prev => ({ ...prev, [m.kw]: null }))
+      }
+    })
+  }, [matches, articleId])
+
+  const score = matches ? scoreKeywords(matches) : 0
+  const color = getColor(score, 8)
+  const scoreLabel = matches === null ? '...' : `${score}/8`
+
+  return (
+    <div style={{ borderBottom: '1px solid #1E2D45' }}>
+      <div
+        onClick={() => setOpen(!open)}
+        style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '8px 12px', cursor: 'pointer', userSelect: 'none',
+        }}
+      >
+        <span style={{ fontSize: '12px', color: '#8899BB' }}>Ключи и позиции</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{ fontSize: '12px', fontWeight: 700, color }}>{scoreLabel}</span>
+          <span style={{ color: '#8899BB', fontSize: '10px' }}>{open ? '▲' : '▼'}</span>
+        </div>
+      </div>
+
+      {open && (
+        <div style={{ padding: '0 12px 10px' }}>
+          {matches === null && (
+            <div style={{ fontSize: '11px', color: '#8899BB' }}>Загрузка...</div>
+          )}
+          {matches !== null && matches.length === 0 && (
+            <div style={{ fontSize: '11px', color: '#8899BB' }}>
+              Ключевые слова из базы не найдены в карточке
+            </div>
+          )}
+          {matches !== null && matches.length > 0 && (
+            <>
+              <div style={{
+                display: 'flex', justifyContent: 'space-between',
+                padding: '2px 0 4px', fontSize: '10px', color: '#556677',
+                borderBottom: '1px solid #1E2D45', marginBottom: '4px'
+              }}>
+                <span>Ключ</span>
+                <div style={{ display: 'flex', gap: '24px' }}>
+                  <span>Попул.</span>
+                  <span style={{ minWidth: '40px', textAlign: 'right' }}>Место</span>
+                </div>
+              </div>
+
+              {matches.map(m => {
+                const pos = positions[m.kw]
+                const posLabel = pos === undefined ? '—' : pos === null ? '—' : `#${pos}`
+                const posColor = '#556677'
+
+                return (
+                  <div key={m.kw} style={{
+                    display: 'flex', justifyContent: 'space-between',
+                    alignItems: 'center', padding: '3px 0', fontSize: '11px',
+                  }}>
+                    <span style={{ color: '#C8D8F0', flex: 1, marginRight: '8px' }}>{m.kw}</span>
+                    <div style={{ display: 'flex', gap: '24px', alignItems: 'center' }}>
+                      <span style={{ color: '#8899BB' }}>{formatPop(m.pop)}</span>
+                      <span style={{
+                        color: posColor, fontWeight: 700,
+                        minWidth: '40px', textAlign: 'right'
+                      }}>{posLabel}</span>
+                    </div>
+                  </div>
+                )
+              })}
+            </>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -116,7 +276,7 @@ function App() {
     return () => clearTimeout(timer)
   }, [])
 
- useEffect(() => {
+  useEffect(() => {
     if (!data || mounted) return
     const priceWidget = document.querySelector('[data-widget="webPrice"]')
     const container = priceWidget?.parentElement?.parentElement
@@ -132,11 +292,11 @@ function App() {
     ReactDOM.createRoot(wrapper).render(<Widget data={data} />)
     setMounted(true)
   }, [data])
+
   return null
 }
 
 function Widget({ data }: { data: ProductData }) {
-
   const scores = {
     photos: scorePhotos(data.photos),
     attributes: scoreAttributes(data.attributes),
@@ -148,31 +308,22 @@ function Widget({ data }: { data: ProductData }) {
     price: scorePrice(data.price),
   }
   const total = Object.values(scores).reduce((a, b) => a + b, 0)
-  const totalMax = 99
-  const totalColor = getColor(total, totalMax)
+  const totalColor = getColor(total, 99)
 
   return (
     <div style={{
-      background: '#0A0E17',
-      border: '1px solid #1E2D45',
-      borderRadius: '12px',
-      margin: '12px 0',
-      fontFamily: 'sans-serif',
-      overflow: 'hidden',
+      background: '#0A0E17', border: '1px solid #1E2D45',
+      borderRadius: '12px', margin: '12px 0',
+      fontFamily: 'sans-serif', overflow: 'hidden',
     }}>
-      {/* Header */}
       <div style={{
-        padding: '10px 12px',
-        borderBottom: '1px solid #1E2D45',
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
+        padding: '10px 12px', borderBottom: '1px solid #1E2D45',
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
       }}>
         <span style={{ color: '#00E5FF', fontWeight: 700, fontSize: '13px' }}>Pomogator.ai</span>
         <span style={{ color: totalColor, fontWeight: 700, fontSize: '16px' }}>{total}/99</span>
       </div>
 
-      {/* Blocks */}
       <Block title="Фото и медиа" score={scores.photos} max={22}>
         <Row label="Фото" value={String(data.photos.count)} good={data.photos.count >= 8} />
         <Row label="Видео" value={data.photos.hasVideo ? 'Есть' : 'Нет'} good={data.photos.hasVideo} />
@@ -210,16 +361,15 @@ function Widget({ data }: { data: ProductData }) {
         <Row label="Фото в описании" value={String(data.rich.imageCount)} good={data.rich.imageCount >= 1} />
       </Block>
 
-      <Block title="Ключи и позиции" score={0} max={0}>
-        <div style={{ fontSize: '11px', color: '#8899BB', padding: '4px 0' }}>
-          Подключите API для анализа ключей
-        </div>
+      <Block title="Цена и акции" score={scores.price} max={2}>
+        <Row label="Скидка" value={data.price.hasDiscount ? `${data.price.discountPercent}%` : 'Нет'} good={data.price.hasDiscount} />
       </Block>
+
+      <KeywordsBlock data={data} />
     </div>
   )
 }
 
-// Mount
 const host = document.createElement('div')
 host.id = 'pomogator-root'
 document.body.appendChild(host)
