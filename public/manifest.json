@@ -27,8 +27,12 @@
   ],
   "web_accessible_resources": [
   {
-    "resources": ["assets/*", "keywords_db.json"],
-    "matches": ["*://www.ozon.ru/*"]
+    "resources": [
+      "keywords_db.json",
+      "commissions.json",
+      "logistics.json"
+    ],
+    "matches": ["https://www.ozon.ru/*"]
   }
 ]
 }
