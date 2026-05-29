@@ -12,7 +12,19 @@ function scorePhotos(p: ProductData['photos']) {
   if (p.hasVideo) s += 3; if (p.has360) s += 2; if (p.hasInfographic) s += 1
   return Math.min(s, 22)
 }
-function scoreAttributes(a: ProductData['attributes']) {
+function scoreAttributes(a: ProductData['attributes'], categoryAttrs?: CategoryAttrsResult | null) {
+  // Если есть данные из API — считаем по реальному количеству атрибутов категории
+  if (categoryAttrs?.totalCount && categoryAttrs.totalCount > 0) {
+    const total = categoryAttrs.totalCount
+    const filled = a.count
+    const pct = filled / total
+    if (pct >= 0.9) return 18
+    if (pct >= 0.7) return 14
+    if (pct >= 0.5) return 10
+    if (pct >= 0.3) return 6
+    return 3
+  }
+  // Fallback без API
   let s = 0
   if (a.count >= 15) s += 10; else if (a.count >= 8) s += 7; else s += 3
   if (a.hasRequired) s += 5; s += Math.min(a.count, 3)
@@ -214,13 +226,16 @@ interface LogisticsDB {
 interface TaxSystem { id: string; label: string; calc: (rev: number, costs: number) => number }
 
 const TAX_SYSTEMS: TaxSystem[] = [
-  { id: 'usn6',   label: 'УСН Доходы 6%',               calc: (rev) => rev * 0.06 },
-  { id: 'usn15',  label: 'УСН Доходы−Расходы 15%',      calc: (rev, costs) => Math.max(0, rev - costs) * 0.15 },
-  { id: 'ausn8',  label: 'АУСН Доходы 8%',              calc: (rev) => rev * 0.08 },
-  { id: 'ausn20', label: 'АУСН Доходы−Расходы 20%',     calc: (rev, costs) => Math.max(0, rev - costs) * 0.20 },
-  { id: 'nds5',   label: 'УСН + НДС 5%',                calc: (rev) => rev * 0.06 + rev * 0.05 },
-  { id: 'nds7',   label: 'УСН + НДС 7%',                calc: (rev) => rev * 0.06 + rev * 0.07 },
-  { id: 'osn',    label: 'ОСН (НДС 22% + прибыль 25%)', calc: (rev, costs) => rev * 0.22 + Math.max(0, rev - costs) * 0.25 },
+  // rev = цена без скидки банка (basePrice), costs = себестоимость в ₽
+  { id: 'usn6',   label: 'УСН Доходы 6%',           calc: (rev) => Math.round(rev * 0.06) },
+  { id: 'usn15',  label: 'УСН Доходы−Расходы 15%',  calc: (rev, costs) => {
+    const tax = Math.max(0, rev - costs) * 0.15
+    const minTax = rev * 0.01  // минимальный налог 1% от выручки
+    return Math.round(Math.max(tax, minTax))
+  }},
+  { id: 'ausn8',  label: 'АУСН Доходы 8%',          calc: (rev) => Math.round(rev * 0.08) },
+  { id: 'ausn20', label: 'АУСН Доходы−Расходы 20%', calc: (rev, costs) => Math.round(Math.max(0, rev - costs) * 0.20) },
+  { id: 'nds',    label: 'НДС (ОСН) 22%',            calc: (rev, costs) => Math.round((rev - costs) * 22 / 122) },
 ]
 
 // ─── Вспомогательные функции ─────────────────────────────────────────────────
@@ -248,7 +263,8 @@ function getVolumeKey(liters: number, volOrder: string[]): string | null {
   return null
 }
 
-// Карта категорий Ozon (хлебные крошки) -> тип товара в таблице комиссий
+// Карта категорий Ozon -> точный тип в таблице комиссий
+// Используется когда алгоритм не может подобрать правильно
 const CATEGORY_MAP: Record<string, string> = {
   'мужская обувь': 'кроссовки',
   'женская обувь': 'туфли',
@@ -258,21 +274,34 @@ const CATEGORY_MAP: Record<string, string> = {
   'мужская одежда': 'футболка',
   'детская одежда': 'футболка',
   'одежда': 'футболка',
+  'крупная бытовая техника': 'холодильник',
+  'мелкая бытовая техника': 'чайник электрический',
+  'бытовая техника': 'чайник электрический',
   'смартфоны и телефоны': 'смартфон',
   'телефоны': 'смартфон',
-  'ноутбуки': 'ноутбук',
-  'планшеты': 'планшет',
-  'телевизоры': 'телевизор',
   'наушники и гарнитуры': 'наушники',
+  'колонки и акустика': 'беспроводная колонка',
   'колонки': 'беспроводная колонка',
   'сумки': 'сумка женская',
   'рюкзаки': 'рюкзак',
-  'часы': 'смарт-часы',
+  'часы и браслеты': 'смарт-часы',
   'игрушки': 'игрушка мягкая',
   'косметика': 'тональный крем',
   'парфюмерия': 'духи',
   'спортивное питание': 'протеин',
+  'кресла и диваны': 'кресло',
+  'столы': 'стол',
+  'стулья': 'стул',
+  'матрасы': 'матрас',
+  'шины': 'шина',
 }
+
+// Запрещённые матчи — слова которые дают неверный результат
+const STOP_MATCHES = new Set([
+  'обувь для собак', 'обувь для куклы', 'обувь карнавальная',
+  'обувь эротическая', 'обувь для ушу', 'бытовка',
+  'кулич', 'водка', 'вода',
+])
 
 function getCommissionRate(
   productType: string,
@@ -283,42 +312,53 @@ function getCommissionRate(
   const key = productType.toLowerCase().trim()
   if (!key) return null
 
-  // 1. Точное совпадение
-  let entry = db.types[key]
+  const brackets = [100, 300, 1500, 5000, 10000]
+  const idx = Math.min(brackets.filter(b => price > b).length, 5)
 
-  // 2. Карта категорий (Мужская обувь -> кроссовки)
-  if (!entry) {
-    const mapped = CATEGORY_MAP[key]
-    if (mapped) entry = db.types[mapped]
+  const getRate = (entry: [number, number]) => {
+    const rates = scheme === 'fbo' ? db.fbo[entry[0]] : db.fbs[entry[1]]
+    return rates ? rates[idx] : null
   }
 
-  // 3. Каждое слово из breadcrumb отдельно + обрезка окончания мн. числа
-  if (!entry) {
-    const firstPart = key.split(',')[0].trim()
-    const words = firstPart.split(' ').filter(w => w.length > 3)
-    outer: for (const word of words) {
-      if (db.types[word]) { entry = db.types[word]; break }
-      for (const suffix of ['ки', 'ги', 'жи', 'ни', 'и', 'ы', 'а']) {
-        if (word.endsWith(suffix) && word.length > suffix.length + 2) {
-          const stem = word.slice(0, -suffix.length)
-          const found = Object.keys(db.types).find(k => k.startsWith(stem) && k.length <= stem.length + 3)
-          if (found) { entry = db.types[found]; break outer }
+  // 1. Точное совпадение
+  if (db.types[key]) return getRate(db.types[key])
+
+  // 2. Карта категорий (для сложных/составных категорий)
+  if (CATEGORY_MAP[key] && db.types[CATEGORY_MAP[key]])
+    return getRate(db.types[CATEGORY_MAP[key]])
+
+  // 3. По каждому значимому слову из хлебных крошек
+  const words = key.replace(/,/g, ' ').split(' ').filter(w => w.length > 2)
+  for (const word of words) {
+    // перебираем варианты: полное слово и с обрезанными окончаниями
+    const stems = [word, ...['еры','ери','еры','ки','жи','ши','ги','ни','и','ы','а','е']
+      .filter(s => word.endsWith(s) && word.length - s.length >= 4)
+      .map(s => word.slice(0, -s.length))]
+
+    for (const stem of stems) {
+      // сначала точное совпадение первого слова ключа
+      const exact = Object.keys(db.types).find(k => k.split(' ')[0] === stem)
+      if (exact && !STOP_MATCHES.has(exact) && db.types[exact]) {
+        return getRate(db.types[exact])
+      }
+      // потом startswith (только для длинных стемов)
+      if (stem.length >= 5) {
+        const starts = Object.keys(db.types)
+          .filter(k => k.split(' ')[0].startsWith(stem) && !STOP_MATCHES.has(k))
+          .sort((a, b) => a.length - b.length)
+        if (starts.length > 0 && db.types[starts[0]]) {
+          return getRate(db.types[starts[0]])
         }
       }
     }
   }
 
-  // 4. Последнее слово через карту категорий (Мужская ОБУВЬ -> обувь -> кроссовки)
-  if (!entry) {
-    const words = key.split(' ').filter(w => w.length > 3)
-    const lastWord = words[words.length - 1]
-    if (lastWord && CATEGORY_MAP[lastWord]) entry = db.types[CATEGORY_MAP[lastWord]]
-  }
+  // 4. Последнее слово через карту
+  const lastWord = words[words.length - 1]
+  if (lastWord && CATEGORY_MAP[lastWord] && db.types[CATEGORY_MAP[lastWord]])
+    return getRate(db.types[CATEGORY_MAP[lastWord]])
 
-  if (!entry) return null
-  const rates = scheme === 'fbo' ? db.fbo[entry[0]] : db.fbs[entry[1]]
-  if (!rates) return null
-  return rates[getPriceBracketIdx(price)]
+  return null
 }
 
 function getLogisticsTariff(liters: number, db: LogisticsDB): number | null {
@@ -329,14 +369,15 @@ function getLogisticsTariff(liters: number, db: LogisticsDB): number | null {
 
 // ─── Новый UnitCalc ───────────────────────────────────────────────────────────
 
-function UnitCalc({ price: parsedPrice, productType }: { price: number; productType: string }) {
+function UnitCalc({ price: parsedPrice, basePrice: parsedBasePrice, productType }: { price: number; basePrice: number; productType: string }) {
   const [commissionsDB, setCommissionsDB] = useState<CommissionsDB | null>(null)
   const [logisticsDB, setLogisticsDB]     = useState<LogisticsDB | null>(null)
   const [cnyRate, setCnyRate]             = useState<number>(13.5)
   const [cnyLoading, setCnyLoading]       = useState(true)
 
   // Пользовательские вводы
-  const [spp, setSpp]             = useState<number>(25)          // СПП от Ozon %
+  const [spp, setSpp]             = useState<number>(25)
+  const [basePrice, setBasePrice]  = useState<number>(parsedBasePrice)          // СПП от Ozon %
   const [costCny, setCostCny]     = useState('')                  // себестоимость ¥
   const [volume, setVolume]       = useState('')                  // объём л
   const [scheme, setScheme]       = useState<'fbo' | 'fbs'>('fbo')
@@ -386,7 +427,8 @@ function UnitCalc({ price: parsedPrice, productType }: { price: number; productT
   const adRub         = Math.round(lkPrice * adRate / 100)
 
   // Налог всегда считается
-  const taxAmount = Math.round(taxSystem.calc(lkPrice, costRub))
+  // Налог считается от цены без скидки банка (basePrice)
+  const taxAmount = taxSystem.calc(basePrice, costRub)
 
   // Итог когда введены себестоимость и объём
   const canCalc       = costCny !== '' && volume !== ''
@@ -610,7 +652,12 @@ function UnitCalc({ price: parsedPrice, productType }: { price: number; productT
         )}
 
         <div style={rowStyle}>
-          <span style={{ fontSize: 12, color: '#6B4E28' }}>{taxSystem.label}</span>
+          <span style={{ fontSize: 12, color: '#6B4E28' }}>
+            {taxSystem.label}
+            <span style={{ fontSize: 10, color: '#9A7040', marginLeft: 4 }}>
+              (база: {basePrice.toLocaleString('ru')} ₽)
+            </span>
+          </span>
           <span style={{ fontFamily: "'DM Serif Display', serif", fontSize: 13, color: '#923020' }}>
             {taxAmount > 0 ? `−${taxAmount.toLocaleString('ru')} ₽` : '—'}
           </span>
@@ -659,15 +706,45 @@ function UnitCalc({ price: parsedPrice, productType }: { price: number; productT
   )
 }
 
+interface CategoryAttrsResult {
+  attrs?: any[]
+  totalCount?: number
+  totalChars?: number
+  requiredCount?: number
+  reqAttrs?: string[]
+  groups?: string[]
+  matchedCategory?: string
+  categoryId?: number
+  typeId?: number
+  error?: string
+}
+
 function Widget({ data }: { data: ProductData }) {
   const [detail, setDetail] = useState<string | null>(null)
   const [matches, setMatches] = useState<KeywordMatch[] | null>(null)
+  const [categoryAttrs, setCategoryAttrs] = useState<CategoryAttrsResult | null>(null)
+  const [attrsLoading, setAttrsLoading] = useState(false)
 
   useEffect(() => { matchKeywords(data).then(setMatches) }, [data])
 
+  // Загружаем атрибуты категории через API если есть ключи
+  useEffect(() => {
+    const categoryName = data.title.productType || ''
+    if (!categoryName) return
+    setAttrsLoading(true)
+    chrome.runtime.sendMessage(
+      { type: 'GET_CATEGORY_ATTRS', categoryName },
+      (resp) => {
+        setAttrsLoading(false)
+        if (resp && !resp.error) setCategoryAttrs(resp)
+        else setCategoryAttrs({ error: resp?.error })
+      }
+    )
+  }, [data.title.productType])
+
   const sc = {
     photos: scorePhotos(data.photos),
-    attrs: scoreAttributes(data.attributes),
+    attrs: scoreAttributes(data.attributes, categoryAttrs),
     reviews: scoreReviews(data.reviews),
     seo: scoreTitle(data.title),
     delivery: scoreDelivery(data.delivery),
@@ -695,10 +772,48 @@ function Widget({ data }: { data: ProductData }) {
       { label: 'Инфографика', value: data.photos.hasInfographic ? 'Есть' : 'Нет', good: data.photos.hasInfographic },
       { label: 'Рекомендуем', value: '8+ фото + видео', good: null },
     ]},
-    attrs: { title: 'Характеристики', score: sc.attrs, max: 18, rows: [
-      { label: 'Заполнено полей', value: String(data.attributes.count), good: data.attributes.count >= 8 },
-      { label: 'Обязательные', value: data.attributes.hasRequired ? 'Все заполнены' : 'Не все', good: data.attributes.hasRequired },
-    ]},
+    attrs: { title: 'Характеристики', score: sc.attrs, max: 18, rows: (() => {
+      const rows: DetailRow[] = []
+      if (attrsLoading) {
+        rows.push({ label: 'Загрузка данных...', value: '⏳', good: null })
+      } else if (categoryAttrs?.totalCount) {
+        // totalChars = только характеристики с группой (без служебных полей)
+        const total = categoryAttrs.totalChars ?? categoryAttrs.totalCount
+        const req = categoryAttrs.requiredCount ?? 0
+        const filled = data.attributes.count
+        const pct = Math.round(filled / total * 100)
+        const toFill90 = Math.max(0, Math.ceil(total * 0.9) - filled)
+
+        // Основные метрики
+        rows.push({ label: 'Заполнено полей', value: `${filled} из ${total} (${pct}%)`, good: pct >= 90 })
+        rows.push({ label: 'Обязательные поля', value: req > 0 ? `${req} шт` : 'нет', good: null })
+        rows.push({ label: 'Категория Ozon', value: categoryAttrs.matchedCategory ?? '—', good: null })
+
+        // Статус по алгоритму
+        if (pct >= 90) {
+          rows.push({ label: '✓ Алгоритм Ozon', value: 'Отличное заполнение (+20-30 позиций)', good: true })
+        } else if (pct >= 70) {
+          rows.push({ label: '⚠ Алгоритм Ozon', value: `Заполните ещё ${toFill90} полей для топа`, good: false })
+        } else {
+          rows.push({ label: '✗ Алгоритм Ozon', value: `Критически мало: нужно ещё ${toFill90} полей`, good: false })
+        }
+
+        // Группы которые стоит заполнить
+        if (categoryAttrs.groups?.length && pct < 90) {
+          rows.push({ label: 'Рекомендуем заполнить', value: categoryAttrs.groups.slice(0, 3).join(', '), good: null })
+        }
+
+        // Обязательные поля из БД
+        if (categoryAttrs.reqAttrs?.length) {
+          rows.push({ label: 'Обязательные поля', value: categoryAttrs.reqAttrs.join(', '), good: null })
+        }
+      } else {
+        rows.push({ label: 'Заполнено полей', value: String(data.attributes.count), good: data.attributes.count >= 8 })
+        rows.push({ label: 'Обязательные', value: data.attributes.hasRequired ? 'Все заполнены' : 'Не все', good: data.attributes.hasRequired })
+        if (categoryAttrs?.error) rows.push({ label: 'Статус', value: categoryAttrs.error, good: null })
+      }
+      return rows
+    })()},
     reviews: { title: 'Отзывы и рейтинг', score: sc.reviews, max: 16, rows: [
       { label: 'Рейтинг', value: String(data.reviews.rating), good: data.reviews.rating >= 4.5 },
       { label: 'Количество отзывов', value: String(data.reviews.reviewCount), good: data.reviews.reviewCount >= 50 },
@@ -725,7 +840,7 @@ function Widget({ data }: { data: ProductData }) {
     price: { title: 'Цена и акции', score: sc.price, max: 2, rows: [
       { label: 'Текущая цена', value: data.price.currentPrice ? `${data.price.currentPrice.toLocaleString('ru')} ₽` : '—', good: null },
       { label: 'Скидка', value: data.price.hasDiscount ? `${data.price.discountPercent}%` : 'Нет', good: data.price.hasDiscount },
-      { label: 'Акция', value: data.price.promoType ?? 'Нет', good: data.price.promoType !== null },
+      { label: 'Индекс цен Ozon', value: data.price.promoType ?? 'Нет (нет данных)', good: null },
     ]},
     keys: { title: 'Ключи и позиции', score: sc.keys, max: 8,
       rows: matches && matches.length > 0
@@ -740,7 +855,7 @@ function Widget({ data }: { data: ProductData }) {
       <div style={wrapStyle}>
         <DetailScreen title={d.title} score={d.score} max={d.max} rows={d.rows} onBack={() => setDetail(null)}
           extra={detail === 'price'
-            ? <UnitCalc price={data.price.currentPrice} productType={data.title.productType ?? ''} />
+            ? <UnitCalc price={data.price.currentPrice} basePrice={data.price.basePrice ?? data.price.currentPrice} productType={data.title.productType ?? ''} />
             : undefined}
         />
       </div>
