@@ -1,0 +1,45 @@
+{
+  "manifest_version": 3,
+  "name": "Pomogator.ai",
+  "version": "0.1.0",
+  "description": "Анализ карточки товара на Ozon",
+  "action": {
+    "default_popup": "src/popup/index.html"
+  },
+  "background": {
+    "service_worker": "src/background/index.ts",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://www.ozon.ru/product/*"],
+      "js": ["src/content/index.tsx"]
+    },
+    {
+      "matches": ["*://seller.ozon.ru/*"],
+      "js": ["src/content/seller.tsx"]
+    }
+  ],
+  "permissions": [
+    "tabs",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://api-seller.ozon.ru/*",
+    "https://www.ozon.ru/*",
+    "https://seller.ozon.ru/*",
+    "http://localhost:3000/*"
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "keywords_db.json",
+        "commissions.json",
+        "logistics.json",
+        "attrs_db.json"
+      ],
+      "matches": ["https://www.ozon.ru/*"]
+    }
+  ]
+}

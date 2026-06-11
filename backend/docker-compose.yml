@@ -1,0 +1,37 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: pomogator
+      POSTGRES_PASSWORD: pomogator
+      POSTGRES_DB: pomogator
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pomogator"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # На этапе разработки бэкенд удобнее гонять на хосте (npm run dev) — горячая
+  # перезагрузка, быстрые правки. Для запуска ВСЕГО в контейнерах (ближе к проду)
+  # раскомментируй блок ниже и в .env поставь DATABASE_URL с хостом 'db' вместо
+  # 'localhost'. Тогда поднимается одной командой: docker compose up
+  #
+  # backend:
+  #   build: .
+  #   restart: unless-stopped
+  #   env_file: .env
+  #   environment:
+  #     DATABASE_URL: postgres://pomogator:pomogator@db:5432/pomogator
+  #   ports:
+  #     - "3000:3000"
+  #   depends_on:
+  #     db:
+  #       condition: service_healthy
+
+volumes:
+  pgdata:

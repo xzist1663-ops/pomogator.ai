@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pomogator.ai</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      width: 320px;
+      background: #0A0E17;
+      color: #F0F4FF;
+      font-family: sans-serif;
+      font-size: 13px;
+    }
+    .header {
+      padding: 16px;
+      border-bottom: 1px solid #1E2D45;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .logo { color: #00E5FF; font-weight: 700; font-size: 15px; }
+    .version { color: #8899BB; font-size: 11px; }
+    .section { padding: 16px; border-bottom: 1px solid #1E2D45; }
+    .section-title { color: #8899BB; font-size: 11px; margin-bottom: 12px; letter-spacing: 0.05em; }
+    .field { margin-bottom: 10px; }
+    .field label { display: block; color: #8899BB; font-size: 11px; margin-bottom: 4px; }
+    .field input {
+      width: 100%;
+      background: #111827;
+      border: 1px solid #1E2D45;
+      border-radius: 6px;
+      padding: 8px 10px;
+      color: #F0F4FF;
+      font-size: 12px;
+      outline: none;
+    }
+    .field input:focus { border-color: #00E5FF; }
+    .btn-save {
+      width: 100%;
+      background: #00E5FF;
+      color: #0A0E17;
+      border: none;
+      border-radius: 6px;
+      padding: 9px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      margin-top: 4px;
+    }
+    .btn-save:hover { background: #00CFEA; }
+    .status {
+      font-size: 11px;
+      margin-top: 8px;
+      min-height: 16px;
+      color: #10B981;
+      text-align: center;
+    }
+    .status.error { color: #EF4444; }
+    .connected-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: #10B98120;
+      color: #10B981;
+    }
+    .api-info { color: #8899BB; font-size: 11px; line-height: 1.6; margin-bottom: 12px; }
+    .api-info a { color: #00E5FF; text-decoration: none; }
+    .register-section { padding: 16px; }
+    .btn-register {
+      width: 100%;
+      background: transparent;
+      color: #00E5FF;
+      border: 1px solid #00E5FF;
+      border-radius: 6px;
+      padding: 9px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .btn-register:hover { background: #00E5FF15; }
+    .register-note { color: #8899BB; font-size: 11px; text-align: center; margin-top: 8px; }
+    .divider { color: #1E2D45; font-size: 11px; text-align: center; padding: 8px 0; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <span class="logo">Pomogator.ai</span>
+    <span class="version">v0.1.0</span>
+  </div>
+
+  <div class="section">
+    <div class="section-title">ПОДКЛЮЧЕНИЕ OZON SELLER API</div>
+    <div class="api-info">
+      Для анализа ключевых слов введите данные из
+      <a href="https://seller.ozon.ru/app/settings/api-keys" target="_blank">ЛК Ozon → Настройки → API ключи</a>
+    </div>
+    <div id="connected-state" style="display:none; margin-bottom:12px;">
+      <span class="connected-badge">✓ API подключён</span>
+    </div>
+    <div class="field">
+      <label>Client-Id</label>
+      <input type="text" id="clientId" placeholder="12345678" />
+    </div>
+    <div class="field">
+      <label>Api-Key</label>
+      <input type="password" id="apiKey" placeholder="••••••••••••••••" />
+    </div>
+    <button class="btn-save" id="saveBtn">Сохранить</button>
+    <div class="status" id="status"></div>
+  </div>
+
+  <div class="divider">───────────────</div>
+
+  <div class="register-section">
+    <button class="btn-register" id="registerBtn">
+      Создать аккаунт Pomogator.ai
+    </button>
+    <div class="register-note">Скоро: вход через аккаунт — без API ключей</div>
+  </div>
+
+  <script type="module" src="./popup.ts"></script>
+</body>
+</html>
