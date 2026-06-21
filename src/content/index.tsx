@@ -6,6 +6,10 @@ import { getPositionOzonSearch } from './positions/ozon-search'
 interface KeywordEntry { kw: string; pop: number; months: number; cc: number; oc: number; comp: number }
 interface KeywordMatch { kw: string; pop: number; found: boolean }
 
+// ─── Шрифты (консистентно с seller.tsx — Inter + Georgia для акцентных цифр) ───
+const MAIN_FONT = "'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif"
+const SERIF_FONT = 'Georgia, serif'
+
 // ─── Максимумы блоков (сумма = 100, веса по алгоритму Ozon) ────────────────────
 const MAX = {
   photos: 24,   // ядро CTR/конверсии (популярность 40-45%)
@@ -80,10 +84,10 @@ function scoreKeywords(matches: KeywordMatch[]) {
 }
 
 function ringColor(score: number, max: number) {
-  if (max === 0) return '#A08060'
+  if (max === 0) return 'rgba(255,255,255,0.3)'
   const pct = score / max
   if (pct >= 0.75) return '#6B9952'
-  if (pct >= 0.45) return '#C4832A'
+  if (pct >= 0.45) return 'rgba(255,204,0,0.85)'
   return '#B85040'
 }
 
@@ -185,13 +189,13 @@ function Ring({ score, max, size = 56 }: { score: number; max: number; size?: nu
   return (
     <div style={{ position: 'relative', width: size, height: size, flexShrink: 0 }}>
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ transform: 'rotate(-90deg)', display: 'block' }}>
-        <circle cx={size/2} cy={size/2} r={r} strokeWidth={sw} stroke="rgba(160,130,80,0.35)" fill="none" />
+        <circle cx={size/2} cy={size/2} r={r} strokeWidth={sw} stroke="rgba(255,255,255,0.1)" fill="none" />
         <circle cx={size/2} cy={size/2} r={r} strokeWidth={sw} stroke={color} fill="none"
           strokeDasharray={circ} strokeDashoffset={offset} strokeLinecap="round" />
       </svg>
-      <div style={{ position: 'absolute', inset, background: '#F5EDD8', borderRadius: '50%',
+      <div style={{ position: 'absolute', inset, borderRadius: '50%',
         display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <span style={{ fontFamily: "'DM Serif Display', serif", fontSize: size >= 52 ? 12 : 10, color: '#5C3E1E', lineHeight: 1 }}>
+        <span style={{ fontFamily: SERIF_FONT, fontSize: size >= 52 ? 12 : 10, color: 'rgba(255,255,255,0.85)', lineHeight: 1 }}>
           {score}/{max}
         </span>
       </div>
@@ -219,11 +223,24 @@ function BlockCard({ score, max, label, full, sub, onClick }: {
     ring.style.transition = 'transform 0.4s ease'
     ring.style.transform = 'rotate3d(0,0,0,0deg) scale(1)'
   }
+  const lastWaveRef = React.useRef(0)
+  const addWave = (e: React.MouseEvent) => {
+    const el = blockRef.current; if (!el) return
+    const now = Date.now(); if (now - lastWaveRef.current < 100) return; lastWaveRef.current = now
+    const r = el.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top
+    const w = document.createElement('div')
+    const sz = Math.max(r.width, r.height) * 0.6
+    w.style.cssText = `position:absolute;border-radius:50%;border:1px solid rgba(255,255,255,0.15);width:${sz}px;height:${sz}px;left:${x-sz/2}px;top:${y-sz/2}px;transform:scale(0);animation:pmg-wave .7s cubic-bezier(0,.5,.5,1) forwards;pointer-events:none`
+    el.appendChild(w); w.addEventListener('animationend', () => w.remove())
+  }
 
+  const [hov, setHov] = React.useState(false)
   const baseStyle: React.CSSProperties = {
-    background: 'rgba(255,252,244,0.6)',
-    border: '0.5px solid rgba(200,175,130,0.5)',
+    background: hov ? 'rgba(255,255,255,0.11)' : 'rgba(255,255,255,0.06)',
+    border: '0.5px solid rgba(255,255,255,0.1)',
     borderRadius: 14, cursor: 'pointer', userSelect: 'none',
+    transition: 'background 0.2s ease',
+    position: 'relative', overflow: 'hidden',
     ...(full
       ? { gridColumn: 'span 2', display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px' }
       : { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 7, padding: '12px 8px 10px' }),
@@ -231,13 +248,15 @@ function BlockCard({ score, max, label, full, sub, onClick }: {
 
   return (
     <div ref={blockRef} style={baseStyle} onClick={onClick}
-      onMouseMove={handleMove} onMouseLeave={handleLeave}>
+      onMouseEnter={() => setHov(true)}
+      onMouseLeave={() => { setHov(false); handleLeave() }}
+      onMouseMove={(e) => { handleMove(e); addWave(e) }}>
       <div ref={ringRef} style={{ transition: 'transform 0.4s ease' }}>
         <Ring score={score} max={max} size={full ? 38 : 56} />
       </div>
       <div style={full ? {} : { textAlign: 'center' }}>
-        <div style={{ fontSize: 12, color: '#6B4E28', fontWeight: 500, lineHeight: 1.3 }}>{label}</div>
-        {sub && <div style={{ fontSize: 11, color: '#9A7040', marginTop: 2 }}>{sub}</div>}
+        <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.78)', fontWeight: 500, lineHeight: 1.3 }}>{label}</div>
+        {sub && <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.38)', marginTop: 2 }}>{sub}</div>}
       </div>
     </div>
   )
@@ -248,22 +267,22 @@ interface DetailRow { label: string; value: string; good?: boolean | null }
 function DetailScreen({ title, score, max, rows, onBack, extra }: {
   title: string; score: number; max: number; rows: DetailRow[]; onBack: () => void; extra?: React.ReactNode
 }) {
-  const color = (good?: boolean | null) => good == null ? '#9A7040' : good ? '#4A8030' : '#923020'
+  const color = (good?: boolean | null) => good == null ? 'rgba(255,255,255,0.4)' : good ? 'rgba(52,199,89,0.9)' : 'rgba(255,80,70,0.9)'
   return (
     <div style={{ padding: 14 }}>
       <div onClick={onBack} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer',
-        marginBottom: 14, color: '#7A5532', fontSize: 13, fontWeight: 500,
-        background: 'rgba(255,252,244,0.7)', border: '0.5px solid rgba(200,170,120,0.4)',
+        marginBottom: 14, color: 'rgba(255,255,255,0.65)', fontSize: 13, fontWeight: 500,
+        background: 'rgba(255,255,255,0.07)', border: '0.5px solid rgba(255,255,255,0.1)',
         borderRadius: 10, padding: '7px 12px', width: 'fit-content' }}>
         ← Назад
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 16,
-        padding: '12px 14px', background: 'rgba(255,252,244,0.7)',
-        border: '0.5px solid rgba(200,170,120,0.4)', borderRadius: 14 }}>
+        padding: '12px 14px', background: 'rgba(255,255,255,0.06)',
+        border: '0.5px solid rgba(255,255,255,0.1)', borderRadius: 14 }}>
         <Ring score={score} max={max} size={52} />
         <div>
-          <div style={{ fontSize: 15, fontWeight: 500, color: '#5C3E1E' }}>{title}</div>
-          <div style={{ fontFamily: "'DM Serif Display', serif", fontSize: 13, color: '#7A5532' }}>
+          <div style={{ fontSize: 15, fontWeight: 500, color: 'rgba(255,255,255,0.88)' }}>{title}</div>
+          <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.45)' }}>
             {score} из {max} баллов
           </div>
         </div>
@@ -271,10 +290,10 @@ function DetailScreen({ title, score, max, rows, onBack, extra }: {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {rows.map((row, i) => (
           <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-            padding: '10px 14px', background: 'rgba(255,252,244,0.6)',
-            border: '0.5px solid rgba(200,175,130,0.45)', borderRadius: 12 }}>
-            <span style={{ fontSize: 12, color: '#6B4E28', fontWeight: 500 }}>{row.label}</span>
-            <span style={{ fontFamily: "'DM Serif Display', serif", fontSize: 13, color: color(row.good) }}>{row.value}</span>
+            padding: '10px 14px', background: 'rgba(255,255,255,0.06)',
+            border: '0.5px solid rgba(255,255,255,0.1)', borderRadius: 12 }}>
+            <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)', fontWeight: 500 }}>{row.label}</span>
+            <span style={{ fontFamily: SERIF_FONT, fontSize: 13, color: color(row.good) }}>{row.value}</span>
           </div>
         ))}
       </div>
@@ -290,18 +309,18 @@ function RecommendScreen({ groups, onBack }: { groups: RecGroup[]; onBack: () =>
   return (
     <div style={{ padding: 14 }}>
       <div onClick={onBack} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer',
-        marginBottom: 14, color: '#7A5532', fontSize: 13, fontWeight: 500,
-        background: 'rgba(255,252,244,0.7)', border: '0.5px solid rgba(200,170,120,0.4)',
+        marginBottom: 14, color: 'rgba(255,255,255,0.65)', fontSize: 13, fontWeight: 500,
+        background: 'rgba(255,255,255,0.07)', border: '0.5px solid rgba(255,255,255,0.1)',
         borderRadius: 10, padding: '7px 12px', width: 'fit-content' }}>
         ← Назад
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 16,
-        padding: '12px 14px', background: 'rgba(255,252,244,0.7)',
-        border: '0.5px solid rgba(200,170,120,0.4)', borderRadius: 14 }}>
+        padding: '12px 14px', background: 'rgba(255,255,255,0.06)',
+        border: '0.5px solid rgba(255,255,255,0.1)', borderRadius: 14 }}>
         <Ring score={doneTips} max={totalTips} size={52} />
         <div>
-          <div style={{ fontSize: 15, fontWeight: 500, color: '#5C3E1E' }}>Рекомендации</div>
-          <div style={{ fontFamily: "'DM Serif Display', serif", fontSize: 13, color: '#7A5532' }}>
+          <div style={{ fontSize: 15, fontWeight: 500, color: 'rgba(255,255,255,0.88)' }}>Рекомендации</div>
+          <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.45)' }}>
             Выполнено {doneTips} из {totalTips}
           </div>
         </div>
@@ -309,18 +328,18 @@ function RecommendScreen({ groups, onBack }: { groups: RecGroup[]; onBack: () =>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         {groups.map((g, gi) => (
           <div key={gi}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: '#5C3E1E', marginBottom: 8, paddingLeft: 4 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: 'rgba(255,255,255,0.85)', marginBottom: 8, paddingLeft: 4 }}>
               {g.title}
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {g.tips.map((t, ti) => (
                 <div key={ti} style={{ display: 'flex', alignItems: 'flex-start', gap: 8,
-                  padding: '9px 12px', background: 'rgba(255,252,244,0.6)',
-                  border: '0.5px solid rgba(200,175,130,0.45)', borderRadius: 11 }}>
-                  <span style={{ fontSize: 14, lineHeight: 1.3, color: t.done ? '#4A8030' : '#C4832A', flexShrink: 0 }}>
+                  padding: '9px 12px', background: 'rgba(255,255,255,0.06)',
+                  border: '0.5px solid rgba(255,255,255,0.1)', borderRadius: 11 }}>
+                  <span style={{ fontSize: 14, lineHeight: 1.3, color: t.done ? '#6B9952' : 'rgba(255,204,0,0.85)', flexShrink: 0 }}>
                     {t.done ? '✓' : '○'}
                   </span>
-                  <span style={{ fontSize: 12, color: t.done ? '#7A8060' : '#6B4E28', lineHeight: 1.35,
+                  <span style={{ fontSize: 12, color: t.done ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.7)', lineHeight: 1.35,
                     textDecoration: t.done ? 'line-through' : 'none' }}>
                     {t.text}
                   </span>
@@ -484,41 +503,41 @@ function UnitCalc({ price: parsedPrice, basePrice: parsedBasePrice, productType 
   const profit = totalExpenses != null ? Math.round(lkPrice - totalExpenses) : null
   const margin = profit != null && lkPrice > 0 ? Math.round(profit / lkPrice * 100) : null
   const roi = profit != null && costRub > 0 ? Math.round(profit / costRub * 100) : null
-  const marginColor = margin == null ? '#9A7040' : margin >= 25 ? '#4A8030' : margin >= 10 ? '#A06010' : '#923020'
+  const marginColor = margin == null ? 'rgba(255,255,255,0.45)' : margin >= 25 ? '#6B9952' : margin >= 10 ? 'rgba(255,204,0,0.85)' : '#B85040'
 
   const inputStyle: React.CSSProperties = {
     width: '100%', padding: '8px 10px', borderRadius: 10,
-    border: '0.5px solid rgba(200,175,130,0.5)',
-    background: 'rgba(255,252,244,0.8)', color: '#5C3E1E', fontSize: 13,
-    fontFamily: "'Outfit', sans-serif", outline: 'none', boxSizing: 'border-box',
+    border: '0.5px solid rgba(255,255,255,0.13)',
+    background: 'rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.82)', fontSize: 13,
+    fontFamily: MAIN_FONT, outline: 'none', boxSizing: 'border-box',
   }
   const rowStyle: React.CSSProperties = {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    padding: '8px 14px', background: 'rgba(255,252,244,0.6)',
-    border: '0.5px solid rgba(200,175,130,0.45)', borderRadius: 10,
+    padding: '8px 14px', background: 'rgba(255,255,255,0.06)',
+    border: '0.5px solid rgba(255,255,255,0.1)', borderRadius: 10,
   }
   const labelStyle: React.CSSProperties = {
-    fontSize: 11, color: '#9A7040', marginBottom: 4,
-    display: 'block', fontFamily: "'Outfit', sans-serif",
+    fontSize: 11, color: 'rgba(255,255,255,0.45)', marginBottom: 4,
+    display: 'block', fontFamily: MAIN_FONT,
   }
 
   return (
     <div style={{ marginTop: 16 }}>
-      <div style={{ fontSize: 13, fontWeight: 500, color: '#5C3E1E', marginBottom: 10 }}>Юнит-экономика</div>
+      <div style={{ fontSize: 13, fontWeight: 500, color: 'rgba(255,255,255,0.85)', marginBottom: 10 }}>Юнит-экономика</div>
       <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
         {(['fbo', 'fbs'] as const).map(s => (
           <button key={s} onClick={() => setScheme(s)} style={{
             flex: 1, padding: '7px 0', borderRadius: 10, border: 'none', cursor: 'pointer',
-            fontFamily: "'Outfit', sans-serif", fontSize: 13, fontWeight: 600,
-            background: scheme === s ? '#C4832A' : 'rgba(200,175,130,0.2)',
-            color: scheme === s ? '#fff' : '#9A7040', transition: 'all 0.15s',
+            fontFamily: MAIN_FONT, fontSize: 13, fontWeight: 600,
+            background: scheme === s ? 'rgba(10,132,255,0.7)' : 'rgba(255,255,255,0.06)',
+            color: scheme === s ? '#fff' : 'rgba(255,255,255,0.45)', transition: 'all 0.15s',
           }}>{s.toUpperCase()}</button>
         ))}
       </div>
       <div style={{ ...rowStyle, flexDirection: 'column', alignItems: 'stretch', gap: 8, marginBottom: 10 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ fontSize: 12, color: '#6B4E28' }}>Цена покупателя (с сайта)</span>
-          <span style={{ fontFamily: "'DM Serif Display', serif", fontSize: 13, color: '#5C3E1E' }}>
+          <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)' }}>Цена покупателя (с сайта)</span>
+          <span style={{ fontFamily: SERIF_FONT, fontSize: 13, color: 'rgba(255,255,255,0.85)' }}>
             {parsedPrice.toLocaleString('ru')} ₽
           </span>
         </div>
@@ -526,8 +545,8 @@ function UnitCalc({ price: parsedPrice, basePrice: parsedBasePrice, productType 
           <label style={{ ...labelStyle, marginBottom: 0, whiteSpace: 'nowrap' }}>СПП от Ozon</label>
           <input style={{ ...inputStyle, width: 60, textAlign: 'center' }} type="number" min="0" max="60" value={spp}
             onChange={e => setSpp(Math.min(60, Math.max(0, parseFloat(e.target.value) || 0)))} />
-          <span style={{ fontSize: 12, color: '#9A7040' }}>%</span>
-          <span style={{ marginLeft: 'auto', fontFamily: "'DM Serif Display', serif", fontSize: 13, color: '#5C3E1E' }}>
+          <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.45)' }}>%</span>
+          <span style={{ marginLeft: 'auto', fontFamily: SERIF_FONT, fontSize: 13, color: 'rgba(255,255,255,0.85)' }}>
             → {lkPrice.toLocaleString('ru')} ₽ в ЛК
           </span>
         </div>
@@ -554,13 +573,13 @@ function UnitCalc({ price: parsedPrice, basePrice: parsedBasePrice, productType 
       </div>
       <div style={{ ...rowStyle, flexDirection: 'column', alignItems: 'stretch', gap: 6, marginBottom: 10 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ fontSize: 12, color: '#6B4E28' }}>
+          <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)' }}>
             Комиссия Ozon
             {autoCommRate != null && manualComm === '' && (
-              <span style={{ color: '#9A7040', marginLeft: 4 }}>(авто · {productType})</span>
+              <span style={{ color: 'rgba(255,255,255,0.45)', marginLeft: 4 }}>(авто · {productType})</span>
             )}
           </span>
-          <span style={{ fontFamily: "'DM Serif Display', serif", fontSize: 13, color: '#923020' }}>
+          <span style={{ fontFamily: SERIF_FONT, fontSize: 13, color: '#923020' }}>
             {commRub != null ? `−${commRub.toLocaleString('ru')} ₽` : '—'}
           </span>
         </div>
@@ -568,12 +587,12 @@ function UnitCalc({ price: parsedPrice, basePrice: parsedBasePrice, productType 
           <input style={{ ...inputStyle, width: 60, textAlign: 'center' }} type="number" min="0" max="100"
             placeholder={autoCommRate != null ? String(autoCommRate) : '—'} value={manualComm}
             onChange={e => setManualComm(e.target.value)} />
-          <span style={{ fontSize: 11, color: '#9A7040' }}>
+          <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)' }}>
             % {manualComm !== '' ? '(вручную)' : autoCommRate != null ? '(определена авто)' : '(не определена — введите)'}
           </span>
           {manualComm !== '' && (
             <button onClick={() => setManualComm('')} style={{
-              marginLeft: 'auto', fontSize: 11, color: '#9A7040', background: 'none',
+              marginLeft: 'auto', fontSize: 11, color: 'rgba(255,255,255,0.45)', background: 'none',
               border: 'none', cursor: 'pointer', padding: '2px 6px',
             }}>сброс</button>
           )}
@@ -582,22 +601,22 @@ function UnitCalc({ price: parsedPrice, basePrice: parsedBasePrice, productType 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 6 }}>
         <div style={{ ...rowStyle, flexDirection: 'column', alignItems: 'stretch', gap: 6 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: 12, color: '#6B4E28' }}>Логистика (среднее)</span>
-            <span style={{ fontFamily: "'DM Serif Display', serif", fontSize: 13, color: '#923020' }}>
+            <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)' }}>Логистика (среднее)</span>
+            <span style={{ fontFamily: SERIF_FONT, fontSize: 13, color: '#923020' }}>
               {logTariff != null ? `−${logTariff} ₽` : liters > 0 ? '—' : 'введите объём'}
             </span>
           </div>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#9A7040', cursor: 'pointer' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'rgba(255,255,255,0.45)', cursor: 'pointer' }}>
             <input type="checkbox" checked={showSurcharge} onChange={e => setShowSurcharge(e.target.checked)}
-              style={{ cursor: 'pointer', accentColor: '#C4832A' }} />
+              style={{ cursor: 'pointer', accentColor: 'rgba(10,132,255,0.85)' }} />
             Учесть наценку за нелокальность
           </label>
           {showSurcharge && (
-            <div style={{ background: 'rgba(196,131,42,0.07)', borderRadius: 8, padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div style={{ background: 'rgba(255,255,255,0.05)', borderRadius: 8, padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 4 }}>
               {SURCHARGE_RATES.map(rate => (
                 <div key={rate} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
-                  <span style={{ color: '#9A7040' }}>Наценка {rate}%</span>
-                  <span style={{ color: '#923020', fontFamily: "'DM Serif Display', serif" }}>
+                  <span style={{ color: 'rgba(255,255,255,0.45)' }}>Наценка {rate}%</span>
+                  <span style={{ color: '#923020', fontFamily: SERIF_FONT }}>
                     +{Math.round(lkPrice * rate / 100).toLocaleString('ru')} ₽
                   </span>
                 </div>
@@ -606,35 +625,35 @@ function UnitCalc({ price: parsedPrice, basePrice: parsedBasePrice, productType 
           )}
         </div>
         <div style={rowStyle}>
-          <span style={{ fontSize: 12, color: '#6B4E28' }}>Реклама ({adRate}%)</span>
-          <span style={{ fontFamily: "'DM Serif Display', serif", fontSize: 13, color: '#923020' }}>−{adRub.toLocaleString('ru')} ₽</span>
+          <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)' }}>Реклама ({adRate}%)</span>
+          <span style={{ fontFamily: SERIF_FONT, fontSize: 13, color: '#923020' }}>−{adRub.toLocaleString('ru')} ₽</span>
         </div>
         <div style={rowStyle}>
-          <span style={{ fontSize: 12, color: '#6B4E28' }}>Эквайринг (1.5%)</span>
-          <span style={{ fontFamily: "'DM Serif Display', serif", fontSize: 13, color: '#923020' }}>−{acquiring.toLocaleString('ru')} ₽</span>
+          <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)' }}>Эквайринг (1.5%)</span>
+          <span style={{ fontFamily: SERIF_FONT, fontSize: 13, color: '#923020' }}>−{acquiring.toLocaleString('ru')} ₽</span>
         </div>
         <div style={rowStyle}>
-          <span style={{ fontSize: 12, color: '#6B4E28' }}>Доставка до выдачи</span>
-          <span style={{ fontFamily: "'DM Serif Display', serif", fontSize: 13, color: '#923020' }}>до −{deliveryFee} ₽</span>
+          <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)' }}>Доставка до выдачи</span>
+          <span style={{ fontFamily: SERIF_FONT, fontSize: 13, color: '#923020' }}>до −{deliveryFee} ₽</span>
         </div>
         {scheme === 'fbs' && (
           <div style={rowStyle}>
-            <span style={{ fontSize: 12, color: '#6B4E28' }}>Обработка отправления</span>
-            <span style={{ fontFamily: "'DM Serif Display', serif", fontSize: 13, color: '#923020' }}>−{processingFee} ₽</span>
+            <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)' }}>Обработка отправления</span>
+            <span style={{ fontFamily: SERIF_FONT, fontSize: 13, color: '#923020' }}>−{processingFee} ₽</span>
           </div>
         )}
         {costRub > 0 && (
           <div style={rowStyle}>
-            <span style={{ fontSize: 12, color: '#6B4E28' }}>Себестоимость</span>
-            <span style={{ fontFamily: "'DM Serif Display', serif", fontSize: 13, color: '#923020' }}>−{Math.round(costRub).toLocaleString('ru')} ₽</span>
+            <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)' }}>Себестоимость</span>
+            <span style={{ fontFamily: SERIF_FONT, fontSize: 13, color: '#923020' }}>−{Math.round(costRub).toLocaleString('ru')} ₽</span>
           </div>
         )}
         <div style={rowStyle}>
-          <span style={{ fontSize: 12, color: '#6B4E28' }}>
+          <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)' }}>
             {taxSystem.label}
-            <span style={{ fontSize: 10, color: '#9A7040', marginLeft: 4 }}>(база: {basePrice.toLocaleString('ru')} ₽)</span>
+            <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.45)', marginLeft: 4 }}>(база: {basePrice.toLocaleString('ru')} ₽)</span>
           </span>
-          <span style={{ fontFamily: "'DM Serif Display', serif", fontSize: 13, color: '#923020' }}>
+          <span style={{ fontFamily: SERIF_FONT, fontSize: 13, color: '#923020' }}>
             {taxAmount > 0 ? `−${taxAmount.toLocaleString('ru')} ₽` : '—'}
           </span>
         </div>
@@ -642,29 +661,29 @@ function UnitCalc({ price: parsedPrice, basePrice: parsedBasePrice, productType 
       {profit != null && (
         <>
           <div style={{ ...rowStyle,
-            background: profit > 0 ? 'rgba(107,153,82,0.12)' : 'rgba(184,80,64,0.10)',
+            background: profit > 0 ? 'rgba(52,199,89,0.1)' : 'rgba(255,59,48,0.1)',
             border: `0.5px solid ${profit > 0 ? 'rgba(107,153,82,0.4)' : 'rgba(184,80,64,0.4)'}`,
             marginBottom: 6,
           }}>
-            <span style={{ fontSize: 13, color: '#5C3E1E', fontWeight: 500 }}>Чистая прибыль</span>
-            <span style={{ fontFamily: "'DM Serif Display', serif", fontSize: 14, color: marginColor, fontWeight: 600 }}>
+            <span style={{ fontSize: 13, color: 'rgba(255,255,255,0.85)', fontWeight: 500 }}>Чистая прибыль</span>
+            <span style={{ fontFamily: SERIF_FONT, fontSize: 14, color: marginColor, fontWeight: 600 }}>
               {profit > 0 ? '+' : ''}{profit.toLocaleString('ru')} ₽
             </span>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
             <div style={{ ...rowStyle, flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}>
-              <span style={{ fontSize: 11, color: '#9A7040' }}>Маржа (от цены ЛК)</span>
-              <span style={{ fontFamily: "'DM Serif Display', serif", fontSize: 16, color: marginColor }}>{margin}%</span>
+              <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)' }}>Маржа (от цены ЛК)</span>
+              <span style={{ fontFamily: SERIF_FONT, fontSize: 16, color: marginColor }}>{margin}%</span>
             </div>
             <div style={{ ...rowStyle, flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}>
-              <span style={{ fontSize: 11, color: '#9A7040' }}>ROI</span>
-              <span style={{ fontFamily: "'DM Serif Display', serif", fontSize: 16,
-                color: roi != null && roi > 50 ? '#4A8030' : roi != null && roi > 0 ? '#A06010' : '#923020' }}>
+              <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)' }}>ROI</span>
+              <span style={{ fontFamily: SERIF_FONT, fontSize: 16,
+                color: roi != null && roi > 50 ? '#6B9952' : roi != null && roi > 0 ? 'rgba(255,204,0,0.85)' : '#B85040' }}>
                 {roi != null ? `${roi}%` : '—'}
               </span>
             </div>
           </div>
-          <div style={{ marginTop: 6, fontSize: 11, color: marginColor, textAlign: 'center', fontFamily: "'Outfit', sans-serif" }}>
+          <div style={{ marginTop: 6, fontSize: 11, color: marginColor, textAlign: 'center', fontFamily: MAIN_FONT }}>
             {margin != null && margin >= 25 ? '✓ Хорошая маржинальность'
               : margin != null && margin >= 10 ? '⚠ Низкая маржинальность'
               : '✗ Экономика не сходится'}
@@ -724,10 +743,16 @@ function Widget({ data }: { data: ProductData }) {
   const recGroups = buildRecommendations(data, matches, categoryAttrs)
 
   const wrapStyle: React.CSSProperties = {
-    fontFamily: "'Outfit', sans-serif",
-    width: '100%', background: '#F5EDD8',
-    borderRadius: 20, border: '0.5px solid rgba(180,150,100,0.25)',
+    fontFamily: MAIN_FONT,
+    width: '100%',
+    background: 'rgba(255,255,255,0.07)',
+    backdropFilter: 'blur(50px) saturate(160%)',
+    WebkitBackdropFilter: 'blur(50px) saturate(160%)',
+    borderRadius: 20,
+    border: '0.5px solid rgba(255,255,255,0.13)',
+    boxShadow: '0 1px 0 rgba(255,255,255,0.12) inset, 0 20px 60px rgba(0,0,0,0.5)',
     overflow: 'hidden', margin: '12px 0',
+    position: 'relative',
   }
 
   const detailMap: Record<string, { title: string; score: number; max: number; rows: DetailRow[] }> = {
@@ -824,20 +849,43 @@ function Widget({ data }: { data: ProductData }) {
 
   return (
     <div style={wrapStyle}>
+      {/* Glow background */}
+      <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'hidden', borderRadius: 20 }}>
+        <div style={{ position:'absolute', width:260, height:260, borderRadius:'50%', background:'rgba(88,86,214,0.25)', filter:'blur(70px)', top:-60, left:-40 }} />
+        <div style={{ position:'absolute', width:200, height:200, borderRadius:'50%', background:'rgba(10,132,255,0.18)', filter:'blur(60px)', bottom:-30, right:-20 }} />
+      </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-        margin: '14px 14px 12px', padding: '10px 14px',
-        background: 'rgba(255,252,244,0.7)', border: '0.5px solid rgba(200,170,120,0.4)', borderRadius: 14 }}>
-        <span style={{ fontSize: 14, fontWeight: 500, color: '#5C3E1E', letterSpacing: '0.02em' }}>Pomogator.ai</span>
-        <div style={{ position: 'relative', width: 44, height: 44 }}>
-          <svg width="44" height="44" viewBox="0 0 44 44" style={{ transform: 'rotate(-90deg)', display: 'block' }}>
-            <circle cx="22" cy="22" r="18" strokeWidth="4" stroke="rgba(160,130,80,0.35)" fill="none" />
-            <circle cx="22" cy="22" r="18" strokeWidth="4" stroke="#7A5532" fill="none"
-              strokeDasharray={totalCirc} strokeDashoffset={totalOffset} strokeLinecap="round" />
-          </svg>
-          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontFamily: "'DM Serif Display', serif", fontSize: 11, color: '#5C3E1E' }}>
-            {total}/100
+        padding: '14px 16px 12px', borderBottom: '0.5px solid rgba(255,255,255,0.07)',
+        position: 'relative' }}>
+        <div>
+          <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', letterSpacing: '0.09em', textTransform: 'uppercase', fontWeight: 500, marginBottom: 2 }}>Pomogator</div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: 'rgba(255,255,255,0.88)', letterSpacing: '-0.2px' }}>Анализ карточки</div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ position: 'relative', width: 42, height: 42 }}>
+            <svg width="42" height="42" viewBox="0 0 44 44" style={{ transform: 'rotate(-90deg)', display: 'block' }}>
+              <circle cx="22" cy="22" r="18" strokeWidth="3.5" stroke="rgba(255,255,255,0.1)" fill="none" />
+              <circle cx="22" cy="22" r="18" strokeWidth="3.5" stroke="rgba(255,255,255,0.75)" fill="none"
+                strokeDasharray={totalCirc} strokeDashoffset={totalOffset} strokeLinecap="round" />
+            </svg>
+            <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 10, fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>
+              {total}
+            </div>
           </div>
+          <button onClick={() => {
+            const el = document.getElementById('pomogator-inline')
+            if (el) el.style.display = el.style.display === 'none' ? '' : 'none'
+          }} style={{
+            width: 26, height: 26, borderRadius: '50%',
+            background: 'rgba(255,255,255,0.08)', border: '0.5px solid rgba(255,255,255,0.13)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            cursor: 'pointer', flexShrink: 0,
+          }}>
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="rgba(255,255,255,0.55)" strokeWidth="1.8" strokeLinecap="round">
+              <path d="M1 1l8 8M9 1L1 9"/>
+            </svg>
+          </button>
         </div>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 9, padding: '0 14px 14px' }}>
@@ -884,8 +932,11 @@ function App() {
 
 const fontLink = document.createElement('link')
 fontLink.rel = 'stylesheet'
-fontLink.href = 'https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Outfit:wght@400;500&display=swap'
+fontLink.href = 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap'
 document.head.appendChild(fontLink)
+const styleEl = document.createElement('style')
+styleEl.textContent = '@keyframes pmg-wave{0%{transform:scale(0);opacity:.5}100%{transform:scale(4);opacity:0}}'
+document.head.appendChild(styleEl)
 
 const host = document.createElement('div')
 host.id = 'pomogator-root'

@@ -1,5 +1,7 @@
 // background/index.ts — Service Worker Pomogator.ai
 
+const ALLOWED_API_BASE = 'http://localhost:3000'
+
 // ─── Локальная БД атрибутов ───────────────────────────────────────────────────
 
 let attrsDbCache: Record<string, any> | null = null
@@ -93,73 +95,12 @@ async function handleGetCategoryAttrs(categoryName: string): Promise<{
   }
 }
 
-// ─── API handlers ─────────────────────────────────────────────────────────────
-
-async function getCreds(): Promise<{ clientId: string; apiKey: string }> {
-  const creds = await chrome.storage.local.get(['clientId', 'apiKey'])
-  return { clientId: creds['clientId'] as string, apiKey: creds['apiKey'] as string }
-}
-
-async function handleTestApi(clientId: string, apiKey: string): Promise<object> {
-  const resp = await fetch('https://api-seller.ozon.ru/v1/analytics/product-queries', {
-    method: 'POST',
-    headers: { 'Client-Id': clientId, 'Api-Key': apiKey, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ date_from: '2026-04-01', date_to: '2026-04-30', limit: 10, offset: 0 }),
-  })
-  return resp.json()
-}
-
-async function handleGetProductInfo(articleId: string, clientId: string, apiKey: string): Promise<{ volume?: number; error?: string }> {
-  try {
-    const resp = await fetch('https://api-seller.ozon.ru/v3/product/info/list', {
-      method: 'POST',
-      headers: { 'Client-Id': clientId, 'Api-Key': apiKey, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ product_id: [parseInt(articleId)] }),
-    })
-    if (!resp.ok) return { error: `API ответил ${resp.status}` }
-    const data = await resp.json()
-    const item = data?.items?.[0]
-    if (!item) return { error: 'Товар не найден в вашем ЛК' }
-    const depth = item.depth ?? item.package_depth ?? 0
-    const width = item.width ?? item.package_width ?? 0
-    const height = item.height ?? item.package_height ?? 0
-    if (depth && width && height) return { volume: Math.round(depth * width * height / 1_000_000 * 1000) / 1000 }
-    if (item.volume_weight) return { volume: item.volume_weight }
-    return { error: 'Габариты не указаны' }
-  } catch (e: any) {
-    return { error: e?.message }
-  }
-}
-
 // ─── Message Router ───────────────────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message.type === 'SEARCH_SERP') {
     sendResponse({ position: null })
-    return true
-  }
-
-  if (message.type === 'TEST_API') {
-    ;(async () => {
-      try {
-        const { clientId, apiKey } = await getCreds()
-        sendResponse({ success: true, data: await handleTestApi(clientId, apiKey) })
-      } catch (e: any) {
-        sendResponse({ success: false, error: e?.message })
-      }
-    })()
-    return true
-  }
-
-  if (message.type === 'GET_PRODUCT_INFO') {
-    ;(async () => {
-      try {
-        sendResponse(await handleGetProductInfo(message.articleId, message.clientId, message.apiKey))
-      } catch (e: any) {
-        sendResponse({ error: e?.message })
-      }
-    })()
     return true
   }
 
@@ -174,13 +115,31 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true
   }
 
-  // ── Прокси для запросов к localhost (Private Network Access блокирует
-  // прямые fetch из контент-скрипта на HTTPS-странице к http://localhost).
-  // Бэкграунд-воркер не ограничен этой политикой.
+  // ── Парсинг XLSX файла — извлекаем CSV из ZIP структуры ──────────────────
+  if (message.type === 'PARSE_XLSX') {
+    ;(async () => {
+      try {
+        const bytes = new Uint8Array(message.data as number[])
+        const csv = await parseXlsxToCsv(bytes)
+        sendResponse({ csv })
+      } catch (e: any) {
+        sendResponse({ error: e?.message ?? 'Ошибка парсинга xlsx' })
+      }
+    })()
+    return true
+  }
+
+  // ── Прокси для запросов к localhost ──────────────────────────────────────────
+  // Валидируем URL — только запросы к нашему бэкенду
   if (message.type === 'API_REQUEST') {
     ;(async () => {
       try {
-        const res = await fetch(message.url, message.options ?? {})
+        const url: string = message.url ?? ''
+        if (!url.startsWith(ALLOWED_API_BASE)) {
+          sendResponse({ ok: false, error: 'Запрещённый URL: ' + url })
+          return
+        }
+        const res = await fetch(url, message.options ?? {})
         const data = await res.json()
         sendResponse({ ok: true, data })
       } catch (e: any) {
@@ -191,3 +150,86 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
 })
+
+// ─── XLSX → CSV парсер (без внешних библиотек) ───────────────────────────────
+async function parseXlsxToCsv(bytes: Uint8Array): Promise<string> {
+  const files = await unzipXlsx(bytes)
+  const ssXml = files['xl/sharedStrings.xml'] ?? ''
+  const shKey = Object.keys(files).find(k => /xl\/worksheets\/sheet\d+\.xml/.test(k))
+  const shXml = files['xl/worksheets/sheet1.xml'] ?? (shKey ? files[shKey] : '') ?? ''
+  if (!shXml) throw new Error('Не найден лист данных в файле')
+
+  const strings: string[] = []
+  for (const m of ssXml.matchAll(/<si>([\s\S]*?)<\/si>/g)) {
+    let val = ''
+    for (const t of m[1].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)) val += t[1]
+    strings.push(xmlDec(val))
+  }
+
+  const rows = new Map<number, Map<number, string>>()
+  for (const rowM of shXml.matchAll(/<row[^>]+r="(\d+)"[^>]*>([\s\S]*?)<\/row>/g)) {
+    const rn = parseInt(rowM[1])
+    const rd = new Map<number, string>()
+    for (const cellM of rowM[2].matchAll(/<c r="([A-Z]+)\d+"([^>]*)>([\s\S]*?)<\/c>/g)) {
+      const col = colN(cellM[1]), attrs = cellM[2], inner = cellM[3]
+      const vm = inner.match(/<v>([\s\S]*?)<\/v>/)
+      if (!vm) continue
+      const val = attrs.includes('t="s"') ? (strings[parseInt(vm[1])] ?? '') : xmlDec(vm[1])
+      rd.set(col, val)
+    }
+    if (rd.size > 0) rows.set(rn, rd)
+  }
+  if (rows.size === 0) throw new Error('Лист пустой')
+
+  const maxR = Math.max(...rows.keys())
+  const maxC = Math.max(...[...rows.values()].flatMap(r => [...r.keys()]))
+  const out: string[] = []
+  for (let r = 1; r <= maxR; r++) {
+    const row = rows.get(r)
+    const cols: string[] = []
+    for (let c = 1; c <= maxC; c++) cols.push(row?.get(c) ?? '')
+    out.push(cols.join(';'))
+  }
+  return out.join('\n')
+}
+
+function colN(s: string): number { let n = 0; for (const c of s) n = n * 26 + c.charCodeAt(0) - 64; return n }
+function xmlDec(s: string): string { return s.replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'") }
+
+async function unzipXlsx(data: Uint8Array): Promise<Record<string, string>> {
+  const r: Record<string, string> = {}
+  const dv = new DataView(data.buffer, data.byteOffset)
+  const dec = new TextDecoder('utf-8')
+  let pos = 0
+  while (pos < data.length - 30) {
+    if (dv.getUint32(pos, true) !== 0x04034B50) { pos++; continue }
+    const comp = dv.getUint16(pos + 8, true)
+    const csz  = dv.getUint32(pos + 18, true)
+    const fnl  = dv.getUint16(pos + 26, true)
+    const exl  = dv.getUint16(pos + 28, true)
+    const name = dec.decode(data.slice(pos + 30, pos + 30 + fnl))
+    const dstart = pos + 30 + fnl + exl
+    const cd = data.slice(dstart, dstart + csz)
+    if (name.endsWith('.xml') || name.endsWith('.rels')) {
+      if (comp === 0) {
+        r[name] = dec.decode(cd)
+      } else if (comp === 8) {
+        try {
+          const stream = new (globalThis as any).DecompressionStream('deflate-raw')
+          const writer = stream.writable.getWriter()
+          const reader = stream.readable.getReader()
+          writer.write(cd); writer.close()
+          const chunks: Uint8Array[] = []
+          while (true) { const { done, value } = await reader.read(); if (done) break; chunks.push(value) }
+          const total = chunks.reduce((s, c) => s + c.length, 0)
+          const buf = new Uint8Array(total); let off = 0
+          for (const c of chunks) { buf.set(c, off); off += c.length }
+          r[name] = dec.decode(buf)
+        } catch { r[name] = '' }
+      }
+    }
+    pos = dstart + csz
+  }
+  return r
+}
+
