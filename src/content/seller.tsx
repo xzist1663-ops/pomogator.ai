@@ -182,6 +182,7 @@ interface PostingsData {
   postings: PostingItem[]
   fboWeeklyCount: number
   applyNonLocal: boolean
+  advCacheReady: boolean
 }
 
 interface StockForecastItem {
@@ -789,6 +790,15 @@ const W_CSS = `
   font-family:${FONT}; box-shadow:0 4px 24px rgba(0,0,0,0.35); overflow:hidden;
   --pmg-info-bg:rgba(10,132,255,0.10); --pmg-info-border:rgba(10,132,255,0.35);
   --pmg-text:rgba(255,255,255,0.82); --pmg-dim:rgba(255,255,255,0.35);
+  display:flex; flex-direction:column;
+  max-height:calc(100vh - 80px);
+  transition: width .2s ease, max-height .2s ease;
+}
+#pmg-profit.pmg-wide { width:600px; }
+#pmg-profit.pmg-tall { max-height:calc(100vh - 20px); }
+#pmg-profit-scroll {
+  overflow-y:auto; overflow-x:hidden; flex:1;
+  scrollbar-width:thin; scrollbar-color:rgba(255,255,255,0.12) transparent;
 }
 .pmg-hdr { display:flex; align-items:center; justify-content:space-between; padding:10px 14px;
   border-bottom:0.5px solid rgba(255,255,255,0.07); border-radius:16px 16px 0 0;
@@ -960,6 +970,9 @@ interface WS {
   products: Product[]; refreshedAt: Date | null
   accounts: AccountInfo[]; activeAccount: AccountInfo | null
   showLinkForm: boolean; pendingClientId: string
+  ordersPeriod: 'today' | 'yesterday' | 'week' | 'custom'
+  ordersCustomDate: string
+  widgetWide: boolean; widgetTall: boolean
 }
 const ws: WS = {
   collapsed: false, section: 'margin', period: 'month',
@@ -968,6 +981,8 @@ const ws: WS = {
   profitData: null, abcData: null, economicsData: null, postingsData: null, stockData: null,
   products: [], refreshedAt: null,
   accounts: [], activeAccount: null, showLinkForm: false, pendingClientId: '',
+  ordersPeriod: 'today', ordersCustomDate: '',
+  widgetWide: false, widgetTall: false,
 }
 function safeProds(): Product[] { if (!Array.isArray(ws.products)) ws.products = []; return ws.products }
 
@@ -1050,6 +1065,9 @@ function renderW(el: HTMLElement) {
     '</div>' +
     '<div class="pmg-hdr-r">' +
     (ws.accounts.length > 0 ? '<button class="pmg-ib" id="pmg-ref" title="Обновить"><svg width="14" height="14" fill="none" viewBox="0 0 14 14"><path d="M12 7A5 5 0 1 1 8.5 2.3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M8.5 1v3h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>' : '') +
+    '<button class="pmg-ib" id="pmg-resize" title="Увеличить/уменьшить окно"><svg width="13" height="13" fill="none" viewBox="0 0 13 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' +
+    (ws.widgetWide ? '<path d="M8 1h4v4M1 8v4h4M12 1L7 6M1 12l5-5"/>' : '<path d="M1 5V1h4M8 12h4v-4M1 1l5 5M12 12L7 7"/>') +
+    '</svg></button>' +
     '<button class="pmg-ib" id="pmg-tog">' + (ws.collapsed ? '＋' : '－') + '</button>' +
     '</div></div>'
 
@@ -1127,15 +1145,19 @@ function renderW(el: HTMLElement) {
 
   const contentHtml = ws.expanded
     ? '<div style="height:0.5px;background:rgba(255,255,255,0.07);margin:0 12px;position:relative;z-index:1"></div>' +
-      tabsHtml + datesHtml +
+      (ws.section !== 'orders' ? tabsHtml + datesHtml : '') +
       '<div class="pmg-body">' + loadHtml + '</div>'
     : ''
 
+  // Применяем классы размера виджета
+  el.className = [ws.widgetWide ? 'pmg-wide' : '', ws.widgetTall ? 'pmg-tall' : ''].filter(Boolean).join(' ')
+
   el.innerHTML = hdrHtml +
-    '<div id="pmg-bd" style="' + (ws.collapsed ? 'display:none' : '') + '">' +
+    '<div id="pmg-bd" style="' + (ws.collapsed ? 'display:none' : 'display:flex;flex-direction:column;flex:1;overflow:hidden') + '">' +
     menuHtml +
+    '<div id="pmg-profit-scroll">' +
     contentHtml +
-    footHtml + '</div>'
+    footHtml + '</div></div>'
 
   bindHdr(el); bindMain(el)
   el.querySelectorAll('.pmg-card').forEach(card => addTilt(card as HTMLElement))
@@ -1390,6 +1412,13 @@ function renderEconomics(): string {
 function bindHdr(el: HTMLElement) {
   el.querySelector('#pmg-hdr')?.addEventListener('click', () => { ws.collapsed = !ws.collapsed; renderW(el) })
   el.querySelector('#pmg-tog')?.addEventListener('click', e => { e.stopPropagation(); ws.collapsed = !ws.collapsed; renderW(el) })
+  el.querySelector('#pmg-resize')?.addEventListener('click', e => {
+    e.stopPropagation()
+    if (!ws.widgetWide) { ws.widgetWide = true; ws.widgetTall = true }
+    else if (ws.widgetWide && ws.widgetTall) { ws.widgetTall = false }
+    else { ws.widgetWide = false; ws.widgetTall = false }
+    renderW(el)
+  })
 
   // Экспорт P&L
   el.querySelector('#pmg-export-btn')?.addEventListener('click', async (e) => {
@@ -1600,6 +1629,50 @@ function bindMain(el: HTMLElement) {
     const p = ws.postingsData.postings.find(x => x.postingNumber === postingNumber)
     if (p) openPostingBreakdown(p)
   }))
+
+  // Переключение периода заказов
+  el.querySelectorAll('[data-op]').forEach(btn => btn.addEventListener('click', (e) => {
+    e.stopPropagation()
+    ws.ordersPeriod = (btn as HTMLElement).dataset.op as any
+    renderW(el)
+  }))
+
+  // Выбор кастомной даты
+  el.querySelector('#pmg-orders-date')?.addEventListener('change', (e) => {
+    ws.ordersCustomDate = (e.target as HTMLInputElement).value
+    renderW(el)
+  })
+
+  // Экспорт заказов в CSV
+  el.querySelector('#pmg-orders-export')?.addEventListener('click', async (e) => {
+    e.stopPropagation()
+    const btn = el.querySelector('#pmg-orders-export') as HTMLButtonElement
+    if (btn) { btn.textContent = '⏳'; btn.disabled = true }
+    try {
+      const d = ws.postingsData
+      if (!d?.postings?.length) { alert('Нет данных для экспорта'); return }
+      const BOM = '\uFEFF'
+      const header = 'Номер заказа;Дата;Артикул;Название;Статус;Маршрут;Склад;Цена покупателя;Комиссия %;Комиссия ₽;Логистика ₽;Наценка нелок. %;Наценка нелок. ₽;Эквайринг ₽;Налог ₽;Себестоимость;Реклама/заказ;Выплата Ozon;Прибыль если выкупят;Убыток если не выкупят;Обратная логистика'
+      const lines = d.postings.map(p => [
+        p.postingNumber, p.createdAt?.slice(0,10), p.offerId,
+        '"' + (p.productName ?? '').replace(/"/g,'""') + '"',
+        p.status, p.clusterFrom + ' → ' + p.clusterTo, p.warehouseName,
+        p.buyerPrice, p.commPct, p.commRub,
+        p.logisticsNorm ?? '', p.nonLocalPct, p.nonLocalRub,
+        p.acquiringRub, p.taxRub ?? '', p.cost ?? '',
+        p.advPerUnit != null ? Math.round(p.advPerUnit) : '',
+        p.payoutRub,
+        p.profitIfBought ?? '', p.lossIfNotBought ?? '', p.returnLogistics ?? '',
+      ].join(';'))
+      const csv = BOM + header + '\n' + lines.join('\n')
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url; a.download = 'orders_' + new Date().toISOString().slice(0,10) + '.csv'
+      a.click(); URL.revokeObjectURL(url)
+    } catch (err: any) { alert('Ошибка: ' + err.message) }
+    finally { if (btn) { btn.textContent = '⬇ CSV'; btn.disabled = false } }
+  })
 }
 
 // ─── Загрузка данных ──────────────────────────────────────────────────────────
@@ -1613,18 +1686,48 @@ function periodQS(): string {
 // ─── Блок Заказы ─────────────────────────────────────────────────────────────
 function renderOrders(): string {
   const d = ws.postingsData
-  if (!d) return '<div style="padding:20px 14px;text-align:center;color:#666;font-size:12px">Нажмите «Обновить» для загрузки активных заказов</div>'
-  if (!d.postings?.length) return '<div style="padding:16px 14px;text-align:center;color:#666;font-size:12px">Нет активных FBO-заказов за последние 14 дней</div>'
 
-  const profitable = d.postings.filter(p => p.profitIfBought != null && p.profitIfBought >= 0).length
-  const losing     = d.postings.filter(p => p.profitIfBought != null && p.profitIfBought < 0).length
-  const noCost     = d.postings.filter(p => p.cost == null).length
+  // Фильтр по периоду (только для отображения — реально данные за 14 дней, фильтруем на фронте)
+  const now = new Date(); const today = now.toISOString().slice(0,10)
+  const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0,10)
+  const weekAgo   = new Date(Date.now() - 7 * 86_400_000).toISOString().slice(0,10)
+  function postingDate(p: PostingItem) { return p.createdAt?.slice(0,10) ?? '' }
+  function filterPostings(postings: PostingItem[]): PostingItem[] {
+    if (ws.ordersPeriod === 'today')     return postings.filter(p => postingDate(p) === today)
+    if (ws.ordersPeriod === 'yesterday') return postings.filter(p => postingDate(p) === yesterday)
+    if (ws.ordersPeriod === 'week')      return postings.filter(p => postingDate(p) >= weekAgo)
+    if (ws.ordersPeriod === 'custom' && ws.ordersCustomDate) return postings.filter(p => postingDate(p) === ws.ordersCustomDate)
+    return postings
+  }
+
+  const periodTabs =
+    '<div style="display:flex;gap:5px;padding:8px 14px 0;position:relative;z-index:1">' +
+    ['today', 'yesterday', 'week', 'custom'].map(p => {
+      const labels: Record<string,string> = { today:'Сегодня', yesterday:'Вчера', week:'7 дней', custom:'Дата' }
+      const on = ws.ordersPeriod === p
+      return '<button class="pmg-tab' + (on?' on':'') + '" data-op="' + p + '">' + labels[p] + '</button>'
+    }).join('') +
+    '</div>' +
+    (ws.ordersPeriod === 'custom'
+      ? '<div style="display:flex;gap:6px;align-items:center;padding:6px 14px 0">' +
+        '<input type="date" id="pmg-orders-date" class="pmg-dinp" value="' + (ws.ordersCustomDate || today) + '" style="flex:1">' +
+        '</div>'
+      : '')
+
+  if (!d) return periodTabs + '<div style="padding:20px 14px;text-align:center;color:#666;font-size:12px">Нажмите «Обновить» для загрузки активных заказов</div>'
+
+  const filtered = filterPostings(d.postings ?? [])
+  if (!filtered.length) return periodTabs + '<div style="padding:16px 14px;text-align:center;color:#666;font-size:12px">Нет заказов за выбранный период</div>'
+
+  const profitable = filtered.filter(p => p.profitIfBought != null && p.profitIfBought >= 0).length
+  const losing     = filtered.filter(p => p.profitIfBought != null && p.profitIfBought < 0).length
+  const noCost     = filtered.filter(p => p.cost == null).length
 
   const STATUS_LABEL: Record<string, string> = {
     awaiting_packaging: '📦 Упаковка', awaiting_deliver: '🏭 На складе', delivering: '🚚 В пути',
   }
 
-  const rows = d.postings.map(p => {
+  const rows = filtered.map(p => {
     const profit = p.profitIfBought
     const hasData = profit != null
     const pColor = !hasData ? '#666' : profit >= 0 ? '#4A8030' : '#923020'
@@ -1635,9 +1738,10 @@ function renderOrders(): string {
       ? '<span style="font-size:9px;padding:1px 5px;border-radius:99px;background:rgba(255,150,60,0.15);color:rgba(255,150,60,0.9);border:0.5px solid rgba(255,150,60,0.3)">+' + p.nonLocalPct + '% нелок.</span>'
       : ''
     const statusLabel = STATUS_LABEL[p.status] ?? p.status
+    const dateStr = postingDate(p).slice(5)  // MM-DD
     return '<tr class="pmg-orders-row" data-posting="' + esc(p.postingNumber) + '" style="cursor:pointer">' +
-      '<td><div class="pmg-aname" style="max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(p.productName) + '">' + esc(p.offerId) + '</div>' +
-      '<div style="font-size:9px;color:#666;margin-top:2px">' + esc(statusLabel) + ' ' + nonLocalBadge + '</div></td>' +
+      '<td><div class="pmg-aname" style="max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(p.productName) + '">' + esc(p.offerId) + '</div>' +
+      '<div style="font-size:9px;color:#666;margin-top:2px">' + dateStr + ' · ' + esc(statusLabel) + ' ' + nonLocalBadge + '</div></td>' +
       '<td style="text-align:center;font-size:10.5px">' + p.buyerPrice.toLocaleString('ru') + '</td>' +
       '<td style="text-align:right;font-weight:700;font-size:11.5px;color:' + pColor + '">' + profitStr + '</td>' +
       '<td style="text-align:right;font-size:10.5px;color:#923020">' + lossStr + '</td>' +
@@ -1648,18 +1752,20 @@ function renderOrders(): string {
     ? '<div style="font-size:9.5px;color:rgba(255,150,60,0.8);padding:0 14px 6px">⚠ Наценка за нелокальность применяется (' + d.fboWeeklyCount + ' FBO/нед ≥ 50)</div>'
     : (d.fboWeeklyCount > 0 ? '<div style="font-size:9.5px;color:#666;padding:0 14px 6px">ℹ Наценка за нелокальность не применяется (' + d.fboWeeklyCount + ' FBO/нед < 50)</div>' : '')
 
-  return '<div class="pmg-sec-header">' +
+  return periodTabs +
+    '<div class="pmg-sec-header" style="margin-top:8px">' +
     '<span style="font-size:14px;font-weight:500;color:rgba(255,255,255,0.85)">Заказы</span>' +
-    '<div style="display:flex;gap:12px;align-items:center">' +
+    '<div style="display:flex;gap:8px;align-items:center">' +
+    '<button id="pmg-orders-export" style="padding:3px 8px;border-radius:7px;border:0.5px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.65);font-size:10.5px;cursor:pointer;font-family:' + FONT + '">⬇ CSV</button>' +
     (losing > 0 ? '<div style="text-align:center"><div style="font-family:' + SERIF + ';font-size:18px;color:#923020">' + losing + '</div><div style="font-size:9px;color:#666;text-transform:uppercase;letter-spacing:.05em">Убыт.</div></div>' : '') +
     '<div style="text-align:center"><div style="font-family:' + SERIF + ';font-size:18px;color:#4A8030">' + profitable + '</div><div style="font-size:9px;color:#666;text-transform:uppercase;letter-spacing:.05em">Прибыл.</div></div>' +
     '</div></div>' +
-    (noCost > 0 ? '<div style="padding:0 14px 8px"><div class="pmg-warn">⚠ У ' + noCost + ' заказ(а) не введена с/с — прибыль не считается. Введите в таблице товаров.</div></div>' : '') +
+    (noCost > 0 ? '<div style="padding:4px 14px 0"><div class="pmg-warn">⚠ У ' + noCost + ' заказ(а) не введена с/с</div></div>' : '') +
     nonLocalNote +
-    '<div style="padding:0 14px 4px;font-size:9.5px;color:#666">' + d.postings.length + ' активных заказов · расчёт по тарифам Ozon · нажмите на строку для деталей</div>' +
+    '<div style="padding:4px 14px 4px;font-size:9.5px;color:#666">' + filtered.length + ' заказов · расчёт по тарифам Ozon · нажмите для деталей</div>' +
     '<div class="pmg-div"></div>' +
     '<div class="pmg-abc-wrap"><table class="pmg-abc"><thead><tr>' +
-    '<th>Артикул</th><th style="text-align:center">Цена</th><th style="text-align:right">Если выкупят</th><th style="text-align:right">Если не выкупят</th>' +
+    '<th>Артикул / дата</th><th style="text-align:center">Цена</th><th style="text-align:right">Выкупят</th><th style="text-align:right">Не выкупят</th>' +
     '</tr></thead><tbody>' + rows + '</tbody></table></div>'
 }
 
@@ -1807,6 +1913,17 @@ function openPostingBreakdown(p: PostingItem) {
   const profitColor = p.profitIfBought == null ? '#888' : p.profitIfBought >= 0 ? '#4A8030' : '#923020'
   const STATUS_LABEL: Record<string, string> = { awaiting_packaging: '📦 Упаковка', awaiting_deliver: '🏭 На складе', delivering: '🚚 В пути' }
 
+  const advCacheReady = ws.postingsData?.advCacheReady ?? false
+  const advRow = p.advPerUnit != null
+    ? ROW('Реклама/заказ', '−' + Math.round(p.advPerUnit).toLocaleString('ru') + ' ₽', 'rgba(255,80,70,0.9)', 'среднее из Performance API')
+    : !advCacheReady
+      ? '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 20px">' +
+        '<div><div style="font-size:13px;color:rgba(255,255,255,0.72)">Реклама/заказ</div>' +
+        '<div style="font-size:10.5px;color:rgba(255,255,255,0.32);margin-top:2px">загружается...</div></div>' +
+        '<div style="width:14px;height:14px;border-radius:50%;border:1.5px solid rgba(255,255,255,0.1);border-top-color:rgba(255,255,255,0.5);animation:pmg-s .7s linear infinite"></div>' +
+        '</div>'
+      : ROW('Реклама/заказ', '—', 'rgba(255,255,255,0.28)', 'нет активных кампаний')
+
   m.innerHTML = glow1 + glow2 + '<div style="position:relative;z-index:2">' +
 
     // Шапка
@@ -1836,7 +1953,7 @@ function openPostingBreakdown(p: PostingItem) {
     ROW('Эквайринг', '−' + p.acquiringRub.toLocaleString('ru') + ' ₽', 'rgba(255,80,70,0.9)', '≈1.5%') +
     (p.taxRub != null ? ROW('Налог', '−' + p.taxRub.toLocaleString('ru') + ' ₽', 'rgba(255,80,70,0.9)') : '') +
     (p.cost != null ? ROW('Себестоимость', '−' + p.cost.toLocaleString('ru') + ' ₽', 'rgba(255,80,70,0.9)') : ROW('Себестоимость', 'не введена', '#888')) +
-    (p.advPerUnit != null ? ROW('Реклама/заказ', '−' + Math.round(p.advPerUnit).toLocaleString('ru') + ' ₽', 'rgba(255,80,70,0.9)', 'среднее из Performance API') : '') +
+    advRow +
     DIV() +
 
     SEC('Итог') +

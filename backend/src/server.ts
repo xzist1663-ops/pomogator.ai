@@ -89,9 +89,9 @@ setInterval(() => {
 
 interface PerfCacheEntry { data: Map<string, number>; updatedAt: number; loading: boolean }
 const perfCache = new Map<string, PerfCacheEntry>()
-const PERF_CACHE_TTL     = 60 * 60 * 1000   // 1 час — перегружаем если старше
+const PERF_CACHE_TTL     = 15 * 60 * 1000   // 15 минут — перегружаем если старше
 const PERF_CACHE_MAX_AGE = 24 * 60 * 60 * 1000  // 24 часа — не используем совсем старые данные
-const PERF_REFRESH_INTERVAL = 60 * 60 * 1000    // фоновое обновление раз в час
+const PERF_REFRESH_INTERVAL = 15 * 60 * 1000    // фоновое обновление каждые 15 минут
 const ACTIVITY_TIMEOUT = 20 * 60 * 1000          // 20 минут — без активности не обновляем кэш
 
 // Трекинг последней активности пользователя.
@@ -216,26 +216,31 @@ async function loadPerfStats(cacheKey: string): Promise<void> {
     const now = new Date()
     const dateTo   = now.toISOString().slice(0, 10)
     // Максимум 62 дня по ограничению Ozon Performance API
-    const dateFrom = new Date(now.getTime() - 60 * 86_400_000).toISOString().slice(0, 10)
+    const dateFrom = new Date(now.getTime() - 30 * 86_400_000).toISOString().slice(0, 10)
     console.log('[perf cache] period:', dateFrom, '→', dateTo)
     const spendMap = new Map<string, number>()
 
-    const campsRes = await perfGet<any>('/api/client/campaign', {
-      state: 'CAMPAIGN_STATE_RUNNING', advObjectType: 'SKU'
-    }, clientId)
-    const camps: any[] = campsRes?.list ?? []
-    console.log('[perf cache] SKU campaigns:', camps.length)
+    // Запрашиваем SKU-кампании и Трафареты (SEARCH_PROMO) отдельно — разные advObjectType
+    const [campsSkuRes, campsPromoRes] = await Promise.all([
+      perfGet<any>('/api/client/campaign', { state: 'CAMPAIGN_STATE_RUNNING', advObjectType: 'SKU' }, clientId).catch(() => null),
+      perfGet<any>('/api/client/campaign', { state: 'CAMPAIGN_STATE_RUNNING', advObjectType: 'SEARCH_PROMO' }, clientId).catch(() => null),
+    ])
+    const camps: any[] = [...(campsSkuRes?.list ?? []), ...(campsPromoRes?.list ?? [])]
+    console.log('[perf cache] SKU campaigns:', (campsSkuRes?.list ?? []).length, '+ SEARCH_PROMO:', (campsPromoRes?.list ?? []).length)
     if (camps.length === 0) {
       cacheEntry.data = spendMap; cacheEntry.updatedAt = Date.now()
       return
     }
 
-    const BATCH = 10
-    for (let bi = 0; bi < camps.length; bi += BATCH) {
-      if (bi > 0) await new Promise(r => setTimeout(r, 5000))
-      const batch = camps.slice(bi, bi + BATCH).map((c: any) => String(c.id))
+    // Запрашиваем каждую кампанию индивидуально чтобы использовать её собственную дату начала.
+    // При батчинге нескольких кампаний с разными датами старта Performance API может вернуть
+    // 0 расхода для кампаний у которых период не совпадает с запрошенным dateFrom.
+    for (let ci = 0; ci < camps.length; ci++) {
+      const camp = camps[ci]
+      if (ci > 0) await new Promise(r => setTimeout(r, 3000))
+      const campFrom = camp.fromDate && camp.fromDate > dateFrom ? camp.fromDate : dateFrom
+      console.log(`[perf cache] ${clientId} camp ${camp.id} "${camp.title}" from=${campFrom}`)
       try {
-        // При 429 ждём 60 сек и повторяем (другой запрос уже занял слот)
         let statReq: any = null
         for (let attempt = 0; attempt < 5; attempt++) {
           if (attempt > 0) {
@@ -244,7 +249,7 @@ async function loadPerfStats(cacheKey: string): Promise<void> {
           }
           try {
             statReq = await perfPost<any>('/api/client/statistics', {
-              campaigns: batch, date_from: dateFrom, date_to: dateTo, groupBy: 'NO_GROUP_BY',
+              campaigns: [String(camp.id)], date_from: campFrom, date_to: dateTo, groupBy: 'NO_GROUP_BY',
             }, clientId)
             break
           } catch (e: any) {
@@ -308,7 +313,7 @@ async function loadPerfStats(cacheKey: string): Promise<void> {
         }
 
         if (!csvText) { console.warn('[perf cache] no csv data'); continue }
-        console.log('[perf cache] csv sample:', csvText.slice(0, 200))
+        console.log('[perf cache] csv sample:', csvText.slice(0, 400))
 
         // Парсим CSV
         const allLines = csvText.split('\n').map(l => l.trim()).filter(Boolean)
@@ -331,10 +336,9 @@ async function loadPerfStats(cacheKey: string): Promise<void> {
           console.log('[perf csv row] sku:', sku, 'spent:', spent)
           if (spent > 0) {
             spendMap.set(sku, (spendMap.get(sku) ?? 0) + spent)
-            console.log('[perf] sku:', sku, 'spent:', spent)
           }
         }
-      } catch (e: any) { console.warn('[perf cache] batch error:', e.message) }
+      } catch (e: any) { console.warn(`[perf cache] camp ${camp.id} error:`, e.message) }
     }
 
     console.log('[perf cache] loaded', spendMap.size, 'entries by perf-SKU')
@@ -356,23 +360,58 @@ async function loadPerfStats(cacheKey: string): Promise<void> {
           const batch = offerIds.slice(i, i + 100)
           const info = await ozonCall<any>('/v3/product/info/list', { offer_id: batch }, clientId)
           for (const item of info?.items ?? []) {
-            // Performance API использует числовой sku (fbo_sku или просто sku)
+            // Регистрируем все доступные варианты SKU
             const skuVariants = [item.sku, item.fbo_sku, item.fbs_sku].filter(Boolean)
             for (const s of skuVariants) skuToOffer.set(String(s), item.offer_id)
           }
         }
         console.log('[perf cache] skuToOffer map size:', skuToOffer.size)
 
+        // Первый проход: маппим через skuToOffer
+        const unmappedSkus: string[] = []
         for (const [perfSku, spent] of spendMap) {
           const offerId = skuToOffer.get(perfSku)
           if (offerId) {
             offerSpendMap.set(offerId, (offerSpendMap.get(offerId) ?? 0) + spent)
             console.log('[perf] mapped', perfSku, '→', offerId, 'spent:', spent)
           } else {
-            offerSpendMap.set(perfSku, (offerSpendMap.get(perfSku) ?? 0) + spent)
-            console.log('[perf] no mapping for', perfSku, '(stored as-is)')
+            unmappedSkus.push(perfSku)
+            console.log('[perf] no mapping for', perfSku, '— will try reverse SKU lookup')
           }
         }
+
+        // Второй проход: для незамапленных SKU делаем прямой запрос по SKU
+        // Performance API может использовать SKU который не совпадает с item.sku
+        // из /v3/product/info/list — в этом случае делаем обратный поиск
+        if (unmappedSkus.length > 0) {
+          for (let i = 0; i < unmappedSkus.length; i += 100) {
+            const batch = unmappedSkus.slice(i, i + 100).map(Number).filter(Boolean)
+            try {
+              const info = await ozonCall<any>('/v3/product/info/list', { sku: batch }, clientId)
+              for (const item of info?.items ?? []) {
+                if (!item.offer_id) continue
+                const skuVariants = [item.sku, item.fbo_sku, item.fbs_sku].filter(Boolean).map(String)
+                for (const s of skuVariants) skuToOffer.set(s, item.offer_id)
+                // Находим совпадение
+                for (const perfSku of unmappedSkus) {
+                  if (skuVariants.includes(perfSku)) {
+                    const spent = spendMap.get(perfSku) ?? 0
+                    offerSpendMap.set(item.offer_id, (offerSpendMap.get(item.offer_id) ?? 0) + spent)
+                    console.log('[perf] reverse-mapped', perfSku, '→', item.offer_id, 'spent:', spent)
+                  }
+                }
+              }
+            } catch (e: any) {
+              console.warn('[perf] reverse SKU lookup failed:', e.message)
+              // Fallback: сохраняем как есть по числовому SKU
+              for (const perfSku of unmappedSkus) {
+                const spent = spendMap.get(perfSku) ?? 0
+                offerSpendMap.set(perfSku, (offerSpendMap.get(perfSku) ?? 0) + spent)
+              }
+            }
+          }
+        }
+
         console.log('[perf cache] mapped', offerSpendMap.size, 'offers')
       } catch (e: any) {
         console.warn('[perf cache] mapping failed:', e.message)
@@ -381,8 +420,12 @@ async function loadPerfStats(cacheKey: string): Promise<void> {
     }
 
     cacheEntry.data = offerSpendMap; cacheEntry.updatedAt = Date.now()
-    // Сохраняем на диск сразу после загрузки
+    // Сбрасываем advPerUnit кэш чтобы он пересчитался с новыми данными perf
+    _advPerUnitCache.delete(clientId)
     savePerfCacheToDisk()
+    // Пересчитываем advPerUnit фоном — не ждём, пользователь увидит результат
+    // при следующем открытии вкладки Заказы (или через 30 сек если уже открыта)
+    getAdvPerUnitMap(clientId).catch(e => console.warn('[advPerUnit] bg recalc failed:', e.message))
   } catch (e: any) {
     console.warn('[perf cache] fatal:', e.message)
   } finally {
@@ -872,7 +915,7 @@ async function syncPricesForAccount(clientId: string): Promise<void> {
 // ── РЕКЛАМНЫЙ РАСХОД НА ЕДИНИЦУ (ДРР per-unit) ───────────────────────────────
 // ══════════════════════════════════════════════════════════════════════════════
 
-// advPerUnit — расход на рекламу ÷ число выкупов, ОБА за одно и то же 60-дневное
+// advPerUnit — расход на рекламу ÷ число выкупов, ОБА за одно и то же 30-дневное
 // окно, в котором Performance API отдаёт статистику (см. loadPerfStats).
 // Это стабильный показатель юнит-экономики товара, который затем можно применять
 // к любому количеству продаж в произвольном периоде (ABC, /api/products), потому
@@ -885,7 +928,7 @@ async function syncPricesForAccount(clientId: string): Promise<void> {
 //
 // perfCache (getPerfSpendByOffer) уже хранит расход по offer_id — маппинг sku→offerId
 // происходит один раз внутри loadPerfStats. Здесь нужен только знаменатель:
-// число доставок за те же 60 дней по каждому offer_id, через offer_id→sku из
+// число доставок за те же 30 дней по каждому offer_id, через offer_id→sku из
 // /v3/product/info/list (тот же sku, которым Performance API помечает товар в items[].sku
 // транзакций доставки).
 // Кэш "расход на рекламу / 1 продажа" — ключ Map это clientId. Раньше кэш был
@@ -896,7 +939,7 @@ async function syncPricesForAccount(clientId: string): Promise<void> {
 interface AdvPerUnitCacheEntry { map: Map<string, number>; updatedAt: number }
 const _advPerUnitCache = new Map<string, AdvPerUnitCacheEntry>()
 const _advPerUnitInflight = new Map<string, Promise<Map<string, number>>>()
-const ADV_PER_UNIT_TTL = 30 * 60 * 1000  // 30 минут — пересчитываем не чаще
+const ADV_PER_UNIT_TTL = 15 * 60 * 1000  // 15 минут — синхронно с perf кэшем
 
 async function getAdvPerUnitMap(clientId?: string): Promise<Map<string, number>> {
   const creds = await resolveCreds(clientId)
@@ -908,7 +951,7 @@ async function getAdvPerUnitMap(clientId?: string): Promise<Map<string, number>>
   }
   // Защита от гонки: /api/products и /api/abc могут вызвать эту функцию почти
   // одновременно (один за другим в рамках loadBase + ABC/Economics на фронте).
-  // Без этой защиты оба видят пустой кэш и независимо тянут транзакции за 60 дней —
+  // Без этой защиты оба видят пустой кэш и независимо тянут транзакции за 30 дней —
   // именно это давало дублирующиеся "[txns chunked] period: ..." в логах и было
   // причиной зависания ABC/Economics (слишком много параллельных запросов разом).
   // Ключ inflight — тот же clientId, поэтому параллельные запросы РАЗНЫХ
@@ -922,20 +965,22 @@ async function getAdvPerUnitMap(clientId?: string): Promise<Map<string, number>>
       const spendMap = await getPerfSpendByOffer(key)
       if (!spendMap || spendMap.size === 0) { _advPerUnitCache.set(key, { map: result, updatedAt: Date.now() }); return result }
 
-      // offer_id → sku, чтобы посчитать продажи за 60 дней по каждому офферу из транзакций
+      // offer_id → sku, чтобы посчитать продажи за 30 дней по каждому офферу из транзакций
       const productList = await ozonCall<any>('/v3/product/list', { filter: { visibility: 'ALL' }, last_id: '', limit: 1000 }, key)
       const offerIds: string[] = (productList?.result?.items ?? []).map((it: any) => it.offer_id).filter(Boolean)
-      const offerToSku = new Map<string, number>()
+      const offerToSkus = new Map<string, number[]>()  // offer_id → все варианты SKU
       for (let i = 0; i < offerIds.length; i += 100) {
         const batch = offerIds.slice(i, i + 100)
         const info = await ozonCall<any>('/v3/product/info/list', { offer_id: batch }, key)
         for (const item of info?.items ?? []) {
-          if (item.offer_id && item.sku) offerToSku.set(item.offer_id, Number(item.sku))
+          if (!item.offer_id) continue
+          const skus = [item.sku, item.fbo_sku, item.fbs_sku].filter(Boolean).map(Number)
+          if (skus.length) offerToSkus.set(item.offer_id, skus)
         }
       }
 
       const txnTo   = new Date().toISOString()
-      const txnFrom = new Date(Date.now() - 60 * 86_400_000).toISOString()
+      const txnFrom = new Date(Date.now() - 30 * 86_400_000).toISOString()
       const ops = await fetchTxnsChunked(txnFrom, txnTo, key)
       const deliveryOps = ops.filter((op: any) => op.operation_type === 'OperationAgentDeliveredToCustomer')
       const salesBySku = new Map<number, number>()
@@ -948,11 +993,16 @@ async function getAdvPerUnitMap(clientId?: string): Promise<Map<string, number>>
 
       for (const [offerId, spent] of spendMap) {
         if (spent <= 0) continue
-        const sku = offerToSku.get(offerId)
-        const sales = sku != null ? (salesBySku.get(sku) ?? 0) : 0
-        if (sales > 0) result.set(offerId, Math.round((spent / sales) * 10) / 10)
-        // Если продаж за 60 дней нет, но расход есть — не делим на 0, оставляем без advPerUnit
-        // (товар получал клики, но не продавался — это сигнал для отдельного алерта, не для маржи)
+        const skus = offerToSkus.get(offerId) ?? []
+        // Суммируем продажи по всем вариантам SKU товара
+        const sales = skus.reduce((s, sku) => s + (salesBySku.get(sku) ?? 0), 0)
+        if (sales > 0) {
+          result.set(offerId, Math.round((spent / sales) * 10) / 10)
+        } else {
+          // Нет продаж за 30 дней — делим на условный 1 чтобы показать
+          // расход как "реклама без продаж", а не скрывать совсем
+          result.set(offerId, Math.round(spent * 10) / 10)
+        }
       }
     } catch (e: any) {
       console.warn('[advPerUnit] failed:', e.message)
@@ -1389,7 +1439,7 @@ app.get('/api/abc', async (req, res) => {
     const dayCount = Math.max(1, (dateTo.getTime() - dateFrom.getTime()) / 86_400_000)
     const monthCount = months.length
 
-    // advPerUnit — расход на рекламу на 1 продажу, посчитан за последние 60 дней
+    // advPerUnit — расход на рекламу на 1 продажу, посчитан за последние 30 дней
     // (см. getAdvPerUnitMap). Применяем этот per-unit показатель к фактическому
     // числу продаж за запрошенный период ABC — это корректно, потому что advPerUnit
     // характеризует юнит-экономику товара, а не конкретный месяц.
@@ -1541,6 +1591,10 @@ app.get('/api/postings', async (req, res) => {
 
     // Расход на рекламу (кэш) — для среднего расхода/заказ по артикулу
     const advMap = await getAdvPerUnitMap(creds.clientId).catch(() => new Map<string, number>())
+    // advCacheReady: true если advPerUnit кэш уже загружен и непустой,
+    // false если ещё не инициализирован (покажем спиннер в модалке)
+    const advCacheEntry = _advPerUnitCache.get(creds.clientId)
+    const advCacheReady = !!(advCacheEntry && advCacheEntry.updatedAt > 0)
 
     // Применяем ли наценку за нелокальность?
     const applyNonLocal = fboWeeklyCount >= 50
@@ -1581,10 +1635,14 @@ app.get('/api/postings', async (req, res) => {
       // Выплата от Ozon (до рекламы и с/с)
       const payoutRub = buyerPrice - commRub - (logisticsTotal ?? 0) - acquiringRub
 
-      // Цена покупателя из снимка (точнее для налога, учитывает акции/соинвест)
+      // Цена для налога — берём реальную цену из posting (она уже известна точно),
+      // а coinvest из снимка (он нужен только для отображения, не для расчёта налога).
+      // Снимок цен может содержать обычную цену без учёта акции — это не та база.
       const snap = priceSnapshots[offerId]
-      const taxBuyerPrice = snap?.priceBuyer ?? snap?.priceCard ?? buyerPrice
-      const coinvestRub   = snap?.coinvestRub ?? null
+      const taxBuyerPrice = buyerPrice  // всегда используем реальную цену покупателя из posting
+      const coinvestRub = snap?.coinvestRub != null && snap.priceInLk > buyerPrice
+        ? Math.round((snap.priceInLk - buyerPrice) * 100) / 100
+        : null
 
       // Налог — передаём реальную цену покупателя и логистику для корректного ОСНО
       const taxB = cost != null && logisticsTotal != null
@@ -1635,7 +1693,7 @@ app.get('/api/postings', async (req, res) => {
       }
     }).filter(Boolean)
 
-    res.json({ postings, fboWeeklyCount, applyNonLocal })
+    res.json({ postings, fboWeeklyCount, applyNonLocal, advCacheReady })
   } catch (e: unknown) { const err = safeError(e, '/api/postings'); res.status(err.status).json({ error: err.message }) }
 })
 
@@ -1763,7 +1821,7 @@ app.get('/api/economics', async (req, res) => {
     const totalAcqCount = Array.from(acquiringByOffer.values()).reduce((s, v) => s + v.count, 0)
     const avgAcqPerOrder = totalAcqCount > 0 ? totalAcqRub / totalAcqCount : 0
 
-    // Расход на рекламу по каждому товару за последние 60 дней (то, что
+    // Расход на рекламу по каждому товару за последние 30 дней (то, что
     // умеет отдавать Performance API кэш — см. getPerfSpendByOffer). Раньше
     // здесь фильтровалось только "расход есть, продаж нет", теперь критерий
     // другой — реклама учитывается в категории 5 если она проваливает маржу
@@ -1877,7 +1935,7 @@ app.get('/api/economics', async (req, res) => {
               losses.push({
                 type: 'ads_eating_profit', label: 'Реклама съела прибыль',
                 amountRub: Math.round(lossTotal),
-                detail: `Маржа без рекламы ${Math.round(marginBeforeAdsPct)}%, с рекламой — ${Math.round(marginAfterAdsPct)}% (цель ${targetMarginPct}%). Расход на рекламу за 60 дней: ${Math.round(adsSpent60d)}₽`,
+                detail: `Маржа без рекламы ${Math.round(marginBeforeAdsPct)}%, с рекламой — ${Math.round(marginAfterAdsPct)}% (цель ${targetMarginPct}%). Расход на рекламу за 30 дней: ${Math.round(adsSpent60d)}₽`,
               })
             }
           }
@@ -2601,7 +2659,7 @@ app.get('/api/debug/txn-offer/:offerId', async (req, res) => {
 
     // Берём последние 60 дней
     const to = new Date().toISOString()
-    const from = new Date(Date.now() - 60 * 86_400_000).toISOString()
+    const from = new Date(Date.now() - 30 * 86_400_000).toISOString()
     const ops = await fetchTxnsChunked(from, to, res.locals.clientId)
 
     const myOps = ops.filter((op: any) => op.items?.some((it: any) => Number(it.sku) === sku))
@@ -2641,13 +2699,27 @@ app.get('/api/debug/perf-token', async (req, res) => {
 app.get('/api/debug/perf-campaigns', async (req, res) => {
   if (!isDev) return res.status(404).json({ error: 'Not found' })
   try {
-    const running  = await perfGet<any>('/api/client/campaign', { state: 'CAMPAIGN_STATE_RUNNING' }, res.locals.clientId)
-    const inactive = await perfGet<any>('/api/client/campaign', { state: 'CAMPAIGN_STATE_INACTIVE' }, res.locals.clientId)
+    const creds = await resolveCreds(res.locals.clientId)
+    // Сначала проверяем токен
+    try { await getPerfToken(creds.clientId); } catch (e: any) { return res.json({ error: 'Токен Performance API: ' + e.message }) }
+    // Все кампании без фильтра по типу
+    const all = await perfGet<any>('/api/client/campaign', {}, creds.clientId)
     res.json({
-      running:  (running?.list ?? []).map((c: any) => ({ id: c.id, title: c.title, state: c.state })),
-      inactive: (inactive?.list ?? []).slice(0, 5).map((c: any) => ({ id: c.id, title: c.title, state: c.state, updatedAt: c.updatedAt })),
+      total: (all?.list ?? []).length,
+      campaigns: (all?.list ?? []).map((c: any) => ({
+        id: c.id, title: c.title, state: c.state,
+        advObjectType: c.advObjectType,
+        fromDate: c.fromDate, toDate: c.toDate,
+      })),
     })
   } catch (e: unknown) { const err = safeError(e, '/api/debug/perf-campaigns'); res.status(err.status).json({ error: err.message }) }
+})
+
+app.get('/api/debug/reset-adv-cache', async (_req, res) => {
+  if (!isDev) return res.status(404).json({ error: 'Not found' })
+  const creds = await resolveCreds().catch(() => null)
+  if (creds) _advPerUnitCache.delete(creds.clientId)
+  res.json({ ok: true, message: 'advPerUnit cache cleared, will recalculate on next request' })
 })
 
 app.get('/api/debug/perf-cache', async (_req, res) => {
@@ -2655,7 +2727,19 @@ app.get('/api/debug/perf-cache', async (_req, res) => {
   try {
     const creds = await resolveCreds()
     const cached = perfCache.get(creds.clientId)
-    res.json({ cacheKey: creds.clientId, entries: cached?.data?.size ?? 0, updatedAt: cached?.updatedAt ? new Date(cached.updatedAt).toISOString() : null, loading: cached?.loading ?? false })
+    const data = cached?.data ? Object.fromEntries(cached.data) : {}
+    // Также покажем advPerUnit кэш
+    const advCached = _advPerUnitCache.get(creds.clientId)
+    const advData = advCached?.map ? Object.fromEntries(advCached.map) : {}
+    res.json({
+      cacheKey: creds.clientId,
+      perfCacheEntries: cached?.data?.size ?? 0,
+      perfCacheData: data,  // offer_id → spend
+      advCacheEntries: advCached?.map?.size ?? 0,
+      advCacheData: advData,  // offer_id → advPerUnit
+      updatedAt: cached?.updatedAt ? new Date(cached.updatedAt).toISOString() : null,
+      loading: cached?.loading ?? false,
+    })
   } catch (e: unknown) { const err = safeError(e, '/api/debug/perf-cache'); res.status(err.status).json({ error: err.message }) }
 })
 
@@ -2696,62 +2780,39 @@ app.get('/api/debug/postings-raw', async (req, res) => {
 app.listen(config.port, () => {
   console.log(`Pomogator backend → http://localhost:${config.port}`)
 
-  // 1. Сразу загружаем кэш с диска — мгновенно, без API запросов
+  // 1. Загружаем кэш с диска — мгновенно, без API запросов.
   loadPerfCacheFromDisk()
 
-  // 2. Через 30 сек прогреваем кэш рекламы для ВСЕХ аккаунтов с Performance API.
-  //    30 сек чтобы Ozon успел завершить предыдущий запрос если бэкенд перезапускался.
-  //    ВАЖНО: раньше тут резолвился только ОДИН глобальный "активный" аккаунт —
-  //    при множестве пользователей это означало, что прогрев кэша при старте
-  //    работал только для одного случайного аккаунта, а остальные грузили рекламу
-  //    "вживую" при первом запросе пользователя (медленно, видимо в логах как
-  //    "[perf cache] no data, loading from API..." на каждый новый аккаунт).
+  // 2. Прогреваем кэш только для АКТИВНОГО аккаунта (тот что сейчас выбран).
+  //    Остальные аккаунты в БД грузятся лениво при первом реальном запросе.
+  //    Это баланс между скоростью (не ждём 10 мин при открытии) и нагрузкой
+  //    (не тратим Ozon API лимиты на неактивных пользователей).
   setTimeout(async () => {
     try {
-      const accs = await getAllAccounts()
-      const withPerf = accs.filter(a => a.perfApiKey)
-      console.log(`[perf cache] warming up ${withPerf.length} account(s) with Performance API...`)
-      for (const acc of withPerf) {
-        try {
-          const cached = perfCache.get(acc.clientId)
-          const age = cached ? Date.now() - cached.updatedAt : Infinity
-          if (age < PERF_CACHE_TTL) {
-            console.log('[perf cache]', acc.clientId, 'disk data is fresh (' + Math.round(age / 60_000) + 'min old), skipping API load')
-            continue
-          }
-          if (cached && cached.data.size > 0) {
-            console.log('[perf cache]', acc.clientId, 'stale disk data, refreshing in background...')
-          } else {
-            console.log('[perf cache]', acc.clientId, 'no data, loading from API...')
-          }
-          // Не await — запускаем прогрев каждого аккаунта параллельно фоном,
-          // не блокируя старт сервера и не блокируя прогрев следующего аккаунта.
-          loadPerfStats(acc.clientId).catch(e => console.warn('[perf cache] startup load failed for', acc.clientId, ':', e.message))
-        } catch (e: any) {
-          console.warn('[perf cache] warmup failed for', acc.clientId, ':', e.message)
-        }
+      const active = await getActiveAccount()
+      if (!active?.perfApiKey) return
+      const cached = perfCache.get(active.clientId)
+      const age = cached ? Date.now() - cached.updatedAt : Infinity
+      if (age < PERF_CACHE_TTL) {
+        console.log('[perf cache]', active.clientId, 'fresh (' + Math.round(age / 60_000) + 'min), skipping')
+        return
       }
+      console.log('[perf cache] warming up active account:', active.clientId)
+      loadPerfStats(active.clientId).catch(e => console.warn('[perf cache] startup warmup failed:', e.message))
     } catch (e: any) {
-      console.warn('[perf cache] warmup query failed:', e.message)
+      console.warn('[perf cache] startup warmup query failed:', e.message)
     }
   }, 30_000)
 
-  // 3. Фоновое обновление каждый час — для всех аккаунтов с Performance API.
-  //    Пропускаем если пользователь не активен более 20 минут — экономим лимиты API.
+  // 3. Периодическое обновление — только активные аккаунты с устаревшим кэшем,
+  //    только если пользователь был активен последние 20 минут.
   setInterval(async () => {
-    if (!isUserActive()) {
-      console.log('[perf cache] user inactive, skipping hourly refresh')
-      return
-    }
-    try {
-      const accs = await getAllAccounts()
-      const withPerf = accs.filter(a => a.perfApiKey)
-      console.log(`[perf cache] hourly refresh for ${withPerf.length} account(s)...`)
-      for (const acc of withPerf) {
-        loadPerfStats(acc.clientId).catch(e => console.warn('[perf cache] hourly refresh failed for', acc.clientId, ':', e.message))
+    if (!isUserActive()) return
+    for (const [clientId, entry] of perfCache) {
+      if (entry.loading) continue
+      if (Date.now() - entry.updatedAt >= PERF_CACHE_TTL) {
+        loadPerfStats(clientId).catch(e => console.warn('[perf cache] refresh failed for', clientId, ':', e.message))
       }
-    } catch (e: any) {
-      console.warn('[perf cache] hourly refresh query failed:', e.message)
     }
   }, PERF_REFRESH_INTERVAL)
 
@@ -2759,6 +2820,10 @@ app.listen(config.port, () => {
   //    Нужна для актуальной налоговой базы (цена покупателя, соинвест Ozon).
   //    Первый запуск — через 30 секунд после старта.
   const PRICE_SYNC_INTERVAL = 30 * 60 * 1000  // 30 минут
+  // Сбрасываем advPerUnit кэш при старте — чтобы reverse SKU lookup сработал
+  // сразу, а не ждал истечения старого TTL.
+  _advPerUnitCache.clear()
+  console.log('[adv cache] cleared on startup — will recalculate with updated SKU mapping')
   setTimeout(async () => {
     const accs = await getAllAccounts().catch(() => [])
     console.log(`[price sync] initial sync for ${accs.length} account(s)...`)
